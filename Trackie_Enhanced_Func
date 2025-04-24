@@ -1,1 +1,570 @@
+import asyncio
+import base64
+import io
+import traceback
+import cv2
+import pyaudio
+import numpy as np
+from PIL import Image
+import mss
+import argparse
+from google.cloud import vision
+from google import genai
+from google.genai import types
+from ultralytics import YOLO
+from segment_anything import SamPredictor, sam_model_registry
+import torch
+import json
+import os
+import logging
+import datetime
+import face_recognition
+import timm
+from torchvision import transforms
 
+# Configuração de áudio
+FORMAT = pyaudio.paInt16
+CHANNELS = 2  # Para fone USB Samsung
+SEND_SAMPLE_RATE = 16000
+RECEIVE_SAMPLE_RATE = 48000  # Compatível com JACK
+CHUNK_SIZE = 1024
+
+# Configurações de modelos e APIs
+GEMINI_MODEL = "models/gemini-2.0-flash-exp"
+YOLO_MODEL_PATH = "yolov8n.pt"
+SAM_MODEL_TYPE = "vit_h"
+SAM_CHECKPOINT = "sam_vit_h_4b8939.pth"
+VISION_API_CREDENTIALS = "path/to/google-credentials.json"
+API_KEY = "AIzaSyA0oC8ZIw3YOY3hqhHogF4VqYMG93jbfIs"  # Substitua pelo seu
+LOG_DIR = "/home/raspsenai/"
+FACES_JSON = os.path.join(LOG_DIR, "known_faces.json")
+MIDAS_MODEL = "MiDaS_small"
+MIDAS_WEIGHTS = "midas_small.pt"  # Baixe de https://github.com/isl-org/MiDaS
+
+# Configuração de logging
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "trackie.log"),
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# Inicialização de clientes
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = VISION_API_CREDENTIALS
+vision_client = vision.ImageAnnotatorClient()
+genai_client = genai.Client(http_options={"api_version": "v1alpha"}, api_key=API_KEY)
+pya = pyaudio.PyAudio()
+
+# Inicializar MiDaS
+midas = timm.create_model(MIDAS_MODEL, pretrained=False)
+midas.load_state_dict(torch.load(MIDAS_WEIGHTS, map_location="cpu"))
+midas.eval()
+midas_transforms = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# Instrução do sistema para Gemini
+SYSTEM_INSTRUCTION = types.Content(
+    parts=[types.Part.from_text(text="""Você é Trackie, uma IA chamada 'traqui', 'tréqui' ou 'tréquie', integrada a um dispositivo vestível no Raspberry Pi para ajudar pessoas com deficiência visual em ambientes industriais. Sua missão é analisar imagens, textos e sons em tempo real, descrevendo o ambiente de forma clara e simples em português brasileiro para auxiliar pessoas cegas. Use o nome do usuário em todas as respostas (ex.: 'Pedro, a porta de saída está à esquerda a 5 passos'). Se o nome não for definido, use 'Usuário'.
+
+Prioridades:
+1. Detectar perigos (ex.: fio desencapado, fogo, objeto quente) e avisar imediatamente (ex.: 'Pedro, cuidado, fogo a 3 passos à sua frente!').
+2. Descrever o ambiente periodicamente (a cada 10s) com objetos, textos e direções (ex.: 'Pedro, ambiente: mesa à frente, placa diz Saída à direita').
+3. Responder a comandos naturais sobre o ambiente, pessoas ou objetos (ex.: 'Trackie, preciso achar um computador vermelho' → 'Pedro, o computador vermelho está numa mesa à esquerda a 7 passos').
+4. Identificar rostos sob demanda (ex.: 'Trackie, quem é esse mano na minha frente?' → 'Pedro, esse é seu colega Artur').
+5. Registrar rostos quando solicitado (ex.: 'Trackie, esse é meu professor Alan') e localizar pessoas conhecidas (ex.: 'Trackie, onde está meu professor Alan?').
+6. Ler placas e bulas automaticamente com OCR (ex.: 'Pedro, a placa diz Aviso: Máquina em Operação').
+
+Regras:
+- Use frases curtas, palavras simples e direções claras (esquerda, direita, frente).
+- Sempre inclua o nome do usuário (ou 'Usuário').
+- Estime distâncias em passos (1 passo ≈ 0,7m) com base em profundidade.
+- Priorize textos relevantes em OCR (ex.: 'saída', 'aviso', 'perigo').
+- Se a imagem ou som não estiver claro, diga 'Pedro, não vejo bem, ajuste o dispositivo'.
+- Adapte respostas ao contexto industrial (ex.: fábrica, oficina).
+- Interprete comandos naturais (ex.: 'quem é esse mano' = identificar rosto; 'preciso achar X' = localizar objeto).""")],
+    role="user"
+)
+
+CONFIG = types.LiveConnectConfig(
+    response_modalities=["audio"],
+    speech_config=types.SpeechConfig(
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="pt-BR-Standard-A")
+        )
+    ),
+    system_instruction=SYSTEM_INSTRUCTION,
+)
+
+"""
+Guia para Treinamento de Modelos no Vertex AI
+1. Configurar Projeto no Google Cloud:
+   - Crie um projeto no Google Cloud Console.
+   - Ative as APIs do Vertex AI e AI Platform.
+   - Configure um bucket no Cloud Storage para armazenar dados e modelos.
+
+2. Preparar Dataset Industrial:
+   - Colete imagens de ambientes industriais (ex.: fábricas, oficinas).
+   - Anote objetos (ex.: interruptor, porta, computador) e perigos (ex.: fio desencapado, fogo, objeto quente) usando LabelImg ou Roboflow.
+   - Para YOLOv8: Exporte anotações no formato YOLO (txt com classes e bounding boxes).
+   - Para SAM: Gere máscaras para segmentação usando LabelMe.
+
+3. Configurar Vertex AI:
+   - Crie um dataset no Vertex AI importando imagens e anotações do Cloud Storage.
+   - Para YOLOv8: Use um contêiner personalizado com Ultralytics.
+   - Para SAM: Configure um contêiner com PyTorch e SAM.
+
+4. Treinar Modelo:
+   - Crie um job de treinamento no Vertex AI, especificando:
+     - Imagem do contêiner (ex.: gcr.io/cloud-aiplatform/pytorch-gpu).
+     - Script de treinamento (ex.: train_yolo.py ou train_sam.py).
+     - Hiperparâmetros (ex.: epochs, learning rate).
+   - Para YOLOv8: Ajuste data.yaml para apontar para o dataset.
+   - Para SAM: Configure treinamento para segmentação semântica.
+
+5. Exportar e Deploy:
+   - Exporte o modelo treinado para o Cloud Storage.
+   - Converta para TFLite/ONNX para Raspberry Pi, se necessário.
+   - Deploy no Vertex AI para inferência na nuvem ou baixe para uso local.
+
+6. Testar e Validar:
+   - Teste com imagens de validação.
+   - Ajuste hiperparâmetros e retreine, se necessário.
+
+Exemplo de script de treinamento para YOLOv8:
+```python
+from ultralytics import YOLO
+model = YOLO('yolov8n.pt')
+model.train(data='path/to/data.yaml', epochs=100, imgsz=640)
+```
+"""
+
+class TrackieSystem:
+    def __init__(self, video_mode="camera"):
+        self.video_mode = video_mode
+        self.audio_in_queue = asyncio.Queue()
+        self.out_queue = asyncio.Queue(maxsize=5)
+        self.session = None
+        self.user_name = "Usuário"  # Padrão até ser definido
+        self.known_faces = {}  # {nome: encoding}
+        self.current_frame = None
+        self.last_detections = []  # Armazena últimas detecções do YOLO
+
+        # Carregar encodings faciais salvos
+        self.load_known_faces()
+
+        # Inicializar modelos offline
+        self.yolo = YOLO(YOLO_MODEL_PATH)
+        self.sam = SamPredictor(sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_CHECKPOINT))
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def load_known_faces(self):
+        if os.path.exists(FACES_JSON):
+            try:
+                with open(FACES_JSON, "r") as f:
+                    data = json.load(f)
+                for name, encoding in data.items():
+                    self.known_faces[name] = np.array(encoding)
+                    logging.info(f"Encoding facial carregado para {name}")
+            except Exception as e:
+                logging.error(f"Erro ao carregar known_faces.json: {e}")
+
+    def save_known_faces(self):
+        try:
+            with open(FACES_JSON, "w") as f:
+                json.dump({name: encoding.tolist() for name, encoding in self.known_faces.items()}, f)
+            logging.info("Encodings faciais salvos em known_faces.json")
+        except Exception as e:
+            logging.error(f"Erro ao salvar known_faces.json: {e}")
+
+    async def play_startup_sound(self):
+        # Gerar beep de 0,5s, 1000 Hz
+        sample_rate = 44100
+        duration = 0.5
+        frequency = 1000
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        audio = np.sin(2 * np.pi * frequency * t) * 32767
+        audio = audio.astype(np.int16)
+
+        stream = pya.open(
+            format=FORMAT,
+            channels=1,
+            rate=sample_rate,
+            output=True,
+        )
+        await asyncio.to_thread(stream.write, audio.tobytes())
+        stream.stop_stream()
+        stream.close()
+        logging.info("Beep inicial tocado.")
+
+    async def initialize_session(self):
+        # Tocar beep inicial e iniciar sessão
+        await self.play_startup_sound()
+        async with genai_client.aio.live.connect(model=GEMINI_MODEL, config=CONFIG) as session:
+            self.session = session
+            await self.session.send(input="Trackie iniciado, pronto para ajudar!", end_of_turn=True)
+
+    def _get_frame(self, cap):
+        ret, frame = cap.read()
+        if not ret:
+            logging.error("Falha ao capturar frame.")
+            return None
+        # Corrigir inversão da câmera
+        frame = cv2.flip(frame, 1)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+        img.thumbnail([1024, 1024])
+        image_io = io.BytesIO()
+        img.save(image_io, format="jpeg")
+        image_io.seek(0)
+        image_bytes = image_io.read()
+        return {
+            "mime_type": "image/jpeg",
+            "data": base64.b64encode(image_bytes).decode(),
+            "raw_frame": frame_rgb,
+            "width": frame_rgb.shape[1]
+        }
+
+    async def get_frames(self):
+        cap = await asyncio.to_thread(cv2.VideoCapture, 0)
+        while True:
+            frame = await asyncio.to_thread(self._get_frame, cap)
+            if frame is None:
+                break
+            self.current_frame = frame
+            await self.out_queue.put(frame)
+            await asyncio.sleep(1.0)
+        cap.release()
+        logging.info("Captura de vídeo encerrada.")
+
+    async def get_screen(self):
+        sct = mss.mss()
+        monitor = sct.monitors[0]
+        while True:
+            i = await asyncio.to_thread(sct.grab, monitor)
+            image_bytes = mss.tools.to_png(i.rgb, i.size)
+            img = Image.open(io.BytesIO(image_bytes))
+            image_io = io.BytesIO()
+            img.save(image_io, format="jpeg")
+            image_io.seek(0)
+            image_bytes = image_io.read()
+            frame = {
+                "mime_type": "image/jpeg",
+                "data": base64.b64encode(image_bytes).decode(),
+                "raw_frame": np.array(img),
+                "width": img.width
+            }
+            self.current_frame = frame
+            await self.out_queue.put(frame)
+            await asyncio.sleep(1.0)
+        logging.info("Captura de tela encerrada.")
+
+    async def listen_audio(self):
+        mic_info = pya.get_default_input_device_info()
+        audio_stream = await asyncio.to_thread(
+            pya.open,
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=SEND_SAMPLE_RATE,
+            input=True,
+            input_device_index=mic_info["index"],
+            frames_per_buffer=CHUNK_SIZE,
+        )
+        while True:
+            try:
+                data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, exception_on_overflow=False)
+                await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+            except Exception as e:
+                logging.error(f"Erro ao ler áudio: {e}")
+        logging.info("Captura de áudio encerrada.")
+
+    async def play_audio(self):
+        stream = await asyncio.to_thread(
+            pya.open,
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=RECEIVE_SAMPLE_RATE,
+            output=True,
+        )
+        while True:
+            try:
+                bytestream = await self.audio_in_queue.get()
+                await asyncio.to_thread(stream.write, bytestream)
+            except Exception as e:
+                logging.error(f"Erro ao reproduzir áudio: {e}")
+        logging.info("Reprodução de áudio encerrada.")
+
+    async def estimate_depth(self, frame, box):
+        try:
+            img = cv2.resize(frame["raw_frame"], (384, 384))
+            img_tensor = midas_transforms(img).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                depth = midas(img_tensor).squeeze().cpu().numpy()
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            depth_crop = depth[int(y1 * 384 / frame["raw_frame"].shape[0]):int(y2 * 384 / frame["raw_frame"].shape[0]),
+                              int(x1 * 384 / frame["raw_frame"].shape[1]):int(x2 * 384 / frame["raw_frame"].shape[1])]
+            avg_depth = np.mean(depth_crop)
+            meters = 10 / (avg_depth + 1e-6)  # Escala arbitrária
+            steps = min(max(int(meters / 0.7), 1), 10)  # Limitar entre 1 e 10 passos
+            return steps
+        except Exception as e:
+            logging.error(f"Erro ao estimar profundidade: {e}")
+            return 3  # Fallback
+
+    async def process_dangers(self, frame):
+        results = self.yolo.predict(frame["raw_frame"], device=self.device)
+        dangers = []
+        for result in results:
+            for box in result.boxes:
+                label = result.names[int(box.cls)]
+                if label in ["wire", "fire", "hot_object"]:
+                    x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
+                    frame_width = frame["width"]
+                    direction = (
+                        "à sua esquerda" if x_center < frame_width / 3
+                        else "à sua direita" if x_center > 2 * frame_width / 3
+                        else "à sua frente"
+                    )
+                    steps = await self.estimate_depth(frame, box)
+                    danger_msg = f"{self.user_name}, cuidado, {label} a {steps} passos {direction}!"
+                    dangers.append(danger_msg)
+                    logging.info(f"Perigo detectado: {label} a {steps} passos {direction}")
+        return dangers
+
+    async def process_objects(self, frame):
+        results = self.yolo.predict(frame["raw_frame"], device=self.device)
+        objects = []
+        self.last_detections = []
+        for result in results:
+            for box in result.boxes:
+                label = result.names[int(box.cls)]
+                if label not in ["wire", "fire", "hot_object"]:
+                    x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
+                    frame_width = frame["width"]
+                    direction = (
+                        "à sua esquerda" if x_center < frame_width / 3
+                        else "à sua direita" if x_center > 2 * frame_width / 3
+                        else "à sua frente"
+                    )
+                    steps = await self.estimate_depth(frame, box)
+                    obj_msg = f"{label} a {steps} passos {direction}"
+                    objects.append(obj_msg)
+                    self.last_detections.append({"label": label, "direction": direction, "steps": steps})
+                    logging.info(f"Objeto detectado: {label} a {steps} passos {direction}")
+        return objects
+
+    async def process_segmentation(self, frame):
+        self.sam.set_image(frame["raw_frame"])
+        masks, _, _ = self.sam.predict()
+        labels = []
+        for i, mask in enumerate(masks):
+            label = f"{self.user_name}, objeto {i+1} detectado."
+            labels.append(label)
+            logging.info(f"Segmento {i+1} detectado.")
+        return labels
+
+    async def process_ocr(self, frame):
+        try:
+            image = vision.Image(content=base64.b64decode(frame["data"]))
+            response = await asyncio.to_thread(vision_client.text_detection, image=image)
+            texts = []
+            keywords = ["saída", "aviso", "perigo", "proibido", "emergência"]
+            for text in response.text_annotations[1:]:
+                desc = text.description.lower()
+                if any(keyword in desc for keyword in keywords):
+                    texts.append(f"{self.user_name}, a placa diz: {text.description}.")
+                    logging.info(f"OCR detectado: {text.description}")
+            return texts
+        except Exception as e:
+            logging.error(f"Erro no OCR: {e}")
+            return []
+
+    async def register_face(self, name):
+        if not self.current_frame:
+            logging.error("Nenhum frame disponível para registrar rosto.")
+            return f"{self.user_name}, não vejo ninguém, aproxime a pessoa."
+        face_locations = face_recognition.face_locations(self.current_frame["raw_frame"])
+        face_encodings = face_recognition.face_encodings(self.current_frame["raw_frame"], face_locations)
+        if not face_encodings:
+            logging.error("Nenhum rosto detectado no frame.")
+            return f"{self.user_name}, não vejo ninguém, aproxime a pessoa."
+        self.known_faces[name] = face_encodings[0]
+        self.save_known_faces()
+        logging.info(f"Rosto registrado: {name}")
+        return f"{self.user_name}, registrado como {name}."
+
+    async def identify_face(self):
+        if not self.current_frame:
+            logging.error("Nenhum frame disponível para identificar rosto.")
+            return f"{self.user_name}, não vejo ninguém agora."
+        face_locations = face_recognition.face_locations(self.current_frame["raw_frame"])
+        face_encodings = face_recognition.face_encodings(self.current_frame["raw_frame"], face_locations)
+        response = []
+        for i, encoding in enumerate(face_encodings):
+            for name, known_encoding in self.known_faces.items():
+                matches = face_recognition.compare_faces([known_encoding], encoding)
+                if matches[0]:
+                    x_center = (face_locations[i][3] + face_locations[i][1]) / 2
+                    frame_width = self.current_frame["width"]
+                    direction = (
+                        "à sua esquerda" if x_center < frame_width / 3
+                        else "à sua direita" if x_center > 2 * frame_width / 3
+                        else "à sua frente"
+                    )
+                    response.append(f"esse é seu {name} {direction}")
+                    logging.info(f"Rosto identificado: {name} {direction}")
+                    break
+        if not response:
+            logging.info("Nenhum rosto conhecido identificado.")
+            return f"{self.user_name}, não reconheço esse rosto."
+        return f"{self.user_name}, {', '.join(response)}."
+
+    async def find_person(self, name):
+        if not self.current_frame:
+            logging.error("Nenhum frame disponível para procurar pessoa.")
+            return f"{self.user_name}, não vejo ninguém agora."
+        face_locations = face_recognition.face_locations(self.current_frame["raw_frame"])
+        face_encodings = face_recognition.face_encodings(self.current_frame["raw_frame"], face_locations)
+        for i, encoding in enumerate(face_encodings):
+            if name in self.known_faces:
+                matches = face_recognition.compare_faces([self.known_faces[name]], encoding)
+                if matches[0]:
+                    x_center = (face_locations[i][3] + face_locations[i][1]) / 2
+                    frame_width = self.current_frame["width"]
+                    direction = (
+                        "à sua esquerda" if x_center < frame_width / 3
+                        else "à sua direita" if x_center > 2 * frame_width / 3
+                        else "à sua frente"
+                    )
+                    logging.info(f"Pessoa encontrada: {name} {direction}")
+                    return f"{self.user_name}, {name} está {direction}."
+        logging.info(f"Pessoa não encontrada: {name}")
+        return f"{self.user_name}, não vejo {name} agora."
+
+    async def find_object(self, target):
+        if not self.current_frame:
+            logging.error("Nenhum frame disponível para procurar objeto.")
+            return f"{self.user_name}, não vejo nada agora."
+        results = self.yolo.predict(self.current_frame["raw_frame"], device=self.device)
+        for result in results:
+            for box in result.boxes:
+                label = result.names[int(box.cls)].lower()
+                if target.lower() in label:  # Suporta busca parcial (ex.: "computador vermelho" em "computador")
+                    x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
+                    frame_width = self.current_frame["width"]
+                    direction = (
+                        "à sua esquerda" if x_center < frame_width / 3
+                        else "à sua direita" if x_center > 2 * frame_width / 3
+                        else "à sua frente"
+                    )
+                    steps = await self.estimate_depth(self.current_frame, box)
+                    logging.info(f"Objeto encontrado: {label} a {steps} passos {direction}")
+                    return f"{self.user_name}, o {target} está numa mesa {direction} a {steps} passos."
+        logging.info(f"Objeto não encontrado: {target}")
+        return f"{self.user_name}, não vejo o {target} agora."
+
+    async def answer_question(self, question):
+        question = question.lower()
+        if any(x in question for x in ["quem é esse", "quem tá na minha frente", "quem é esse mano"]):
+            return await self.identify_face()
+        elif "onde está" in question:
+            target = question.split("onde está")[-1].strip().replace("pra sair da sala", "").strip()
+            if target in self.known_faces:
+                return await self.find_person(target)
+            return await self.find_object(target)
+        elif any(x in question for x in ["preciso achar", "onde tá", "acha um"]):
+            target = question.split(" ")  # Extrair objeto (ex.: "computador vermelho")
+            target = " ".join([word for word in target if word not in ["trackie", "preciso", "achar", "onde", "tá", "um"]]).strip()
+            return await self.find_object(target)
+        elif "tem perigo" in question:
+            dangers = await self.process_dangers(self.current_frame) if self.current_frame else []
+            if dangers:
+                return "; ".join(dangers)
+            return f"{self.user_name}, não vejo perigos agora."
+        elif "meu nome é" in question:
+            self.user_name = question.split("meu nome é")[-1].strip()
+            logging.info(f"Nome do usuário definido: {self.user_name}")
+            return f"{self.user_name}, nome registrado!"
+        return f"{self.user_name}, não entendi o comando, pode repetir?"
+
+    async def send_realtime(self):
+        last_description_time = 0
+        description_interval = 10  # Descrever ambiente a cada 10s
+        while True:
+            msg = await self.out_queue.get()
+            if "raw_frame" in msg:
+                dangers = await self.process_dangers(msg)
+                objects = await self.process_objects(msg)
+                segments = await self.process_segmentation(msg)
+                ocr_texts = await self.process_ocr(msg)
+                combined_info = dangers + ocr_texts
+                current_time = datetime.datetime.now().timestamp()
+                if objects and (current_time - last_description_time >= description_interval):
+                    combined_info.append(f"{self.user_name}, ambiente: {', '.join(objects)}.")
+                    last_description_time = current_time
+                if combined_info:
+                    await self.session.send(input={"text": "; ".join(combined_info), "image": msg}, end_of_turn=True)
+                    logging.info(f"Enviado para Gemini: {'; '.join(combined_info)}")
+            else:
+                async for response in self.session.receive():
+                    if text := response.text:
+                        text_lower = text.lower()
+                        if "esse é meu" in text_lower:
+                            name = text_lower.split("esse é meu")[-1].strip()
+                            response_msg = await self.register_face(name)
+                            await self.session.send(input=response_msg, end_of_turn=True)
+                        else:
+                            response_msg = await self.answer_question(text)
+                            await self.session.send(input=response_msg, end_of_turn=True)
+                        break
+                await self.session.send(input=msg)
+                logging.info("Áudio enviado para Gemini.")
+
+    async def receive_audio(self):
+        while True:
+            turn = self.session.receive()
+            async for response in turn:
+                if data := response.data:
+                    self.audio_in_queue.put_nowait(data)
+                if text := response.text:
+                    print(text, end="")
+                    logging.info(f"Resposta da IA: {text}")
+            while not self.audio_in_queue.empty():
+                self.audio_in_queue.get_nowait()
+
+    async def run(self):
+        try:
+            async with (
+                genai_client.aio.live.connect(model=GEMINI_MODEL, config=CONFIG) as session,
+                asyncio.TaskGroup() as tg,
+            ):
+                self.session = session
+                await self.initialize_session()
+
+                tg.create_task(self.send_realtime())
+                tg.create_task(self.listen_audio())
+                if self.video_mode == "camera":
+                    tg.create_task(self.get_frames())
+                elif self.video_mode == "screen":
+                    tg.create_task(self.get_screen())
+                tg.create_task(self.receive_audio())
+                tg.create_task(self.play_audio())
+
+                await asyncio.Event().wait()
+
+        except Exception as e:
+            logging.error(f"Erro no sistema: {traceback.format_exc()}")
+            traceback.print_exception(e)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="camera",
+        help="pixels to stream from",
+        choices=["camera", "screen", "none"],
+    )
+    args = parser.parse_args()
+    trackie = TrackieSystem(video_mode=args.mode)
+    asyncio.run(trackie.run())
