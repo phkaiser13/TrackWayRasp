@@ -24,22 +24,22 @@ from torchvision import transforms
 
 # Configuração de áudio
 FORMAT = pyaudio.paInt16
-CHANNELS = 2  # Para fone USB Samsung
+CHANNELS = 2
 SEND_SAMPLE_RATE = 16000
-RECEIVE_SAMPLE_RATE = 48000  # Compatível com JACK
+RECEIVE_SAMPLE_RATE = 48000
 CHUNK_SIZE = 1024
 
 # Configurações de modelos e APIs
 GEMINI_MODEL = "models/gemini-2.0-flash-exp"
-YOLO_MODEL_PATH = "yolov8n.pt"
+YOLO_MODEL_PATH = "/home/raspsenai/yolov8n.pt"
 SAM_MODEL_TYPE = "vit_h"
-SAM_CHECKPOINT = "sam_vit_h_4b8939.pth"
-VISION_API_CREDENTIALS = "path/to/google-credentials.json"
-API_KEY = "AIzaSyA0oC8ZIw3YOY3hqhHogF4VqYMG93jbfIs"  # Substitua pelo seu
+SAM_CHECKPOINT = "/home/raspsenai/sam_vit_h_4b8939.pth"
+VISION_API_CREDENTIALS = "/home/raspsenai/google-credentials.json"
+API_KEY = "SUA_CHAVE_DO_GEMINI"  # Substitua pela sua chave
 LOG_DIR = "/home/raspsenai/"
 FACES_JSON = os.path.join(LOG_DIR, "known_faces.json")
 MIDAS_MODEL = "MiDaS_small"
-MIDAS_WEIGHTS = "midas_small.pt"  # Baixe de https://github.com/isl-org/MiDaS
+MIDAS_WEIGHTS = "/home/raspsenai/midas_small.pt"
 
 # Configuração de logging
 logging.basicConfig(
@@ -55,7 +55,7 @@ genai_client = genai.Client(http_options={"api_version": "v1alpha"}, api_key=API
 pya = pyaudio.PyAudio()
 
 # Inicializar MiDaS
-midas = timm.create_model(MIDAS_MODEL, pretrained=False)
+midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", pretrained=False, force_reload=False)
 midas.load_state_dict(torch.load(MIDAS_WEIGHTS, map_location="cpu"))
 midas.eval()
 midas_transforms = transforms.Compose([
@@ -105,7 +105,7 @@ Guia para Treinamento de Modelos no Vertex AI
 
 2. Preparar Dataset Industrial:
    - Colete imagens de ambientes industriais (ex.: fábricas, oficinas).
-   - Anote objetos (ex.: interruptor, porta, computador) e perigos (ex.: fio desencapado, fogo, objeto quente) usando LabelImg ou Roboflow.
+   - Anote objetos (ex.: interruptor, porta) e perigos (ex.: buracos, fios) usando LabelImg ou Roboflow.
    - Para YOLOv8: Exporte anotações no formato YOLO (txt com classes e bounding boxes).
    - Para SAM: Gere máscaras para segmentação usando LabelMe.
 
@@ -145,7 +145,7 @@ class TrackieSystem:
         self.audio_in_queue = asyncio.Queue()
         self.out_queue = asyncio.Queue(maxsize=5)
         self.session = None
-        self.user_name = "Usuário"  # Padrão até ser definido
+        self.user_name = None
         self.known_faces = {}  # {nome: encoding}
         self.current_frame = None
         self.last_detections = []  # Armazena últimas detecções do YOLO
@@ -202,7 +202,13 @@ class TrackieSystem:
         await self.play_startup_sound()
         async with genai_client.aio.live.connect(model=GEMINI_MODEL, config=CONFIG) as session:
             self.session = session
-            await self.session.send(input="Trackie iniciado, pronto para ajudar!", end_of_turn=True)
+            await self.session.send(input="Trackie iniciado, pronto para ajudar! Qual é o seu nome?", end_of_turn=True)
+            async for response in session.receive():
+                if text := response.text:
+                    self.user_name = text.strip()
+                    await self.session.send(input=f"Entendido, {self.user_name}. Estou pronto para ajudar!", end_of_turn=True)
+                    logging.info(f"Nome do usuário definido: {self.user_name}")
+                    break
 
     def _get_frame(self, cap):
         ret, frame = cap.read()
@@ -295,15 +301,18 @@ class TrackieSystem:
         logging.info("Reprodução de áudio encerrada.")
 
     async def estimate_depth(self, frame, box):
+        # Processar profundidade com MiDaS para uma bounding box
         try:
             img = cv2.resize(frame["raw_frame"], (384, 384))
             img_tensor = midas_transforms(img).unsqueeze(0).to(self.device)
             with torch.no_grad():
                 depth = midas(img_tensor).squeeze().cpu().numpy()
+            # Recortar a região da bounding box
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             depth_crop = depth[int(y1 * 384 / frame["raw_frame"].shape[0]):int(y2 * 384 / frame["raw_frame"].shape[0]),
                               int(x1 * 384 / frame["raw_frame"].shape[1]):int(x2 * 384 / frame["raw_frame"].shape[1])]
             avg_depth = np.mean(depth_crop)
+            # Converter profundidade para passos (assumindo 1 passo ≈ 0,7m)
             meters = 10 / (avg_depth + 1e-6)  # Escala arbitrária
             steps = min(max(int(meters / 0.7), 1), 10)  # Limitar entre 1 e 10 passos
             return steps
@@ -317,7 +326,7 @@ class TrackieSystem:
         for result in results:
             for box in result.boxes:
                 label = result.names[int(box.cls)]
-                if label in ["wire", "fire", "hot_object"]:
+                if label in ["hole", "wire", "fire", "machine"]:
                     x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
                     frame_width = frame["width"]
                     direction = (
@@ -338,7 +347,7 @@ class TrackieSystem:
         for result in results:
             for box in result.boxes:
                 label = result.names[int(box.cls)]
-                if label not in ["wire", "fire", "hot_object"]:
+                if label not in ["hole", "wire", "fire", "machine"]:
                     x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
                     frame_width = frame["width"]
                     direction = (
@@ -369,7 +378,7 @@ class TrackieSystem:
             response = await asyncio.to_thread(vision_client.text_detection, image=image)
             texts = []
             keywords = ["saída", "aviso", "perigo", "proibido", "emergência"]
-            for text in response.text_annotations[1:]:
+            for text in response.text_annotations[1:]:  # Ignorar texto completo
                 desc = text.description.lower()
                 if any(keyword in desc for keyword in keywords):
                     texts.append(f"{self.user_name}, a placa diz: {text.description}.")
@@ -399,25 +408,35 @@ class TrackieSystem:
             return f"{self.user_name}, não vejo ninguém agora."
         face_locations = face_recognition.face_locations(self.current_frame["raw_frame"])
         face_encodings = face_recognition.face_encodings(self.current_frame["raw_frame"], face_locations)
-        response = []
+        for encoding in face_encodings:
+            for name, known_encoding in self.known_faces.items():
+                matches = face_recognition.compare_faces([known_encoding], encoding)
+                if matches[0]:
+                    logging.info(f"Rosto identificado: {name}")
+                    return f"{self.user_name}, esse é seu {name}."
+        logging.info("Nenhum rosto conhecido identificado.")
+        return f"{self.user_name}, não reconheço esse rosto."
+
+    async def process_faces(self, frame):
+        face_locations = face_recognition.face_locations(frame["raw_frame"])
+        face_encodings = face_recognition.face_encodings(frame["raw_frame"], face_locations)
+        faces = []
         for i, encoding in enumerate(face_encodings):
             for name, known_encoding in self.known_faces.items():
                 matches = face_recognition.compare_faces([known_encoding], encoding)
                 if matches[0]:
                     x_center = (face_locations[i][3] + face_locations[i][1]) / 2
-                    frame_width = self.current_frame["width"]
+                    frame_width = frame["width"]
                     direction = (
                         "à sua esquerda" if x_center < frame_width / 3
                         else "à sua direita" if x_center > 2 * frame_width / 3
                         else "à sua frente"
                     )
-                    response.append(f"esse é seu {name} {direction}")
-                    logging.info(f"Rosto identificado: {name} {direction}")
+                    face_msg = f"{self.user_name}, o rosto de {name} está {direction}."
+                    faces.append(face_msg)
+                    logging.info(f"Rosto reconhecido: {name} {direction}")
                     break
-        if not response:
-            logging.info("Nenhum rosto conhecido identificado.")
-            return f"{self.user_name}, não reconheço esse rosto."
-        return f"{self.user_name}, {', '.join(response)}."
+        return faces
 
     async def find_person(self, name):
         if not self.current_frame:
@@ -441,51 +460,24 @@ class TrackieSystem:
         logging.info(f"Pessoa não encontrada: {name}")
         return f"{self.user_name}, não vejo {name} agora."
 
-    async def find_object(self, target):
-        if not self.current_frame:
-            logging.error("Nenhum frame disponível para procurar objeto.")
-            return f"{self.user_name}, não vejo nada agora."
-        results = self.yolo.predict(self.current_frame["raw_frame"], device=self.device)
-        for result in results:
-            for box in result.boxes:
-                label = result.names[int(box.cls)].lower()
-                if target.lower() in label:  # Suporta busca parcial (ex.: "computador vermelho" em "computador")
-                    x_center = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
-                    frame_width = self.current_frame["width"]
-                    direction = (
-                        "à sua esquerda" if x_center < frame_width / 3
-                        else "à sua direita" if x_center > 2 * frame_width / 3
-                        else "à sua frente"
-                    )
-                    steps = await self.estimate_depth(self.current_frame, box)
-                    logging.info(f"Objeto encontrado: {label} a {steps} passos {direction}")
-                    return f"{self.user_name}, o {target} está numa mesa {direction} a {steps} passos."
-        logging.info(f"Objeto não encontrado: {target}")
-        return f"{self.user_name}, não vejo o {target} agora."
-
     async def answer_question(self, question):
         question = question.lower()
-        if any(x in question for x in ["quem é esse", "quem tá na minha frente", "quem é esse mano"]):
+        if "esse rosto é de quem" in question:
             return await self.identify_face()
         elif "onde está" in question:
             target = question.split("onde está")[-1].strip().replace("pra sair da sala", "").strip()
             if target in self.known_faces:
                 return await self.find_person(target)
-            return await self.find_object(target)
-        elif any(x in question for x in ["preciso achar", "onde tá", "acha um"]):
-            target = question.split(" ")  # Extrair objeto (ex.: "computador vermelho")
-            target = " ".join([word for word in target if word not in ["trackie", "preciso", "achar", "onde", "tá", "um"]]).strip()
-            return await self.find_object(target)
+            for detection in self.last_detections:
+                if detection["label"].lower() in target:
+                    return f"{self.user_name}, o {detection['label']} está a {detection['steps']} passos {detection['direction']}."
+            return f"{self.user_name}, não vejo o {target} agora."
         elif "tem perigo" in question:
             dangers = await self.process_dangers(self.current_frame) if self.current_frame else []
             if dangers:
                 return "; ".join(dangers)
             return f"{self.user_name}, não vejo perigos agora."
-        elif "meu nome é" in question:
-            self.user_name = question.split("meu nome é")[-1].strip()
-            logging.info(f"Nome do usuário definido: {self.user_name}")
-            return f"{self.user_name}, nome registrado!"
-        return f"{self.user_name}, não entendi o comando, pode repetir?"
+        return f"{self.user_name}, não entendi a pergunta, pode repetir?"
 
     async def send_realtime(self):
         last_description_time = 0
@@ -497,7 +489,9 @@ class TrackieSystem:
                 objects = await self.process_objects(msg)
                 segments = await self.process_segmentation(msg)
                 ocr_texts = await self.process_ocr(msg)
-                combined_info = dangers + ocr_texts
+                faces = await self.process_faces(msg)
+                combined_info = dangers + faces + ocr_texts
+                # Adicionar descrição periódica do ambiente
                 current_time = datetime.datetime.now().timestamp()
                 if objects and (current_time - last_description_time >= description_interval):
                     combined_info.append(f"{self.user_name}, ambiente: {', '.join(objects)}.")
@@ -506,6 +500,7 @@ class TrackieSystem:
                     await self.session.send(input={"text": "; ".join(combined_info), "image": msg}, end_of_turn=True)
                     logging.info(f"Enviado para Gemini: {'; '.join(combined_info)}")
             else:
+                # Processar comandos de voz
                 async for response in self.session.receive():
                     if text := response.text:
                         text_lower = text.lower()
@@ -513,7 +508,7 @@ class TrackieSystem:
                             name = text_lower.split("esse é meu")[-1].strip()
                             response_msg = await self.register_face(name)
                             await self.session.send(input=response_msg, end_of_turn=True)
-                        else:
+                        elif any(x in text_lower for x in ["esse rosto é de quem", "onde está", "tem perigo"]):
                             response_msg = await self.answer_question(text)
                             await self.session.send(input=response_msg, end_of_turn=True)
                         break
