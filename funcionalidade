@@ -1,0 +1,36 @@
+🔄 Como tudo interage?
+✳️ Detecção → Gemini
+Frame chega.
+
+YOLO analisa e detecta perigo.
+
+MiDaS calcula distância.
+
+A mensagem de alerta (ex.: fogo) é formatada.
+
+A mensagem vai para o Gemini, junto com a imagem do frame.
+
+Gemini transforma isso em resposta falada (e opcionalmente textual).
+
+✳️ Comando de voz → Gemini → Ação
+O usuário fala: "Trackie, onde está o professor Alan?"
+
+Gemini interpreta isso como comando para find_person("Alan").
+
+find_person usa reconhecimento facial.
+
+A resposta (ex.: "Alan está à sua direita") vai pro Gemini.
+
+Gemini responde com voz/texto.
+
+✅ Efetividade da lógica (interação e resposta)
+Muito efetivo, porque:
+
+Os módulos são especializados.
+
+Há comunicação assíncrona e em tempo real.
+
+Gemini recebe dados multimodais (áudio + imagem + texto) e responde de forma natural.
+
+Há priorização clara de tarefas (perigo → ambiente → comandos → OCR → rostos).
+
