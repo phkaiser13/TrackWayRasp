@@ -146,53 +146,143 @@ if not API_KEY:
     sys.exit(1)
 
 # Tentar importar GenAI DEPOIS de checar a key
-genai = None
-types = None
-client = None
-CONFIG = None
-try:
-    from google import genai # pip install google-genai
-    from google.ai import generativelanguage as glm # Import baixo nível para tipos se necessário
-    # 'types' costumava ser de google.genai, agora pode estar em glm ou não ser mais necessário explicitamente
-    # from google.genai import types # Tentar a forma antiga por segurança
+    # --- INICIALIZAÇÃO CORRETA DO CLIENTE GEMINI (Aqui, após ler os Args) ---
+    global client, generation_config, tools # Declara que vamos *definir* estas globais aqui
+    client = None # Reseta cliente para garantir que está limpo antes de tentar inicializar
+    generation_config = None
+    tools = []
+    logger.info(f"--- Iniciando Cliente Google GenAI (Modelo: {GEMINI_MODEL}) ---") # Usa o GEMINI_MODEL atualizado pelos args
 
-    logger.info(f"SDK google-genai versão: {genai.__version__}")
+    try:
+        # Tenta importar de novo para garantir (caso tenha falhado antes)
+        # Usa aliases para evitar conflito se 'genai'/'glm' já existirem com outro significado
+        import google.generativeai as genai_core
+        from google.ai import generativelanguage as glm_core
+
+        # Atribui aos nomes globais que o resto do código espera
+        genai = genai_core
+        glm = glm_core
+        if not genai: raise ImportError("Falha ao reimportar google.generativeai")
+
+        logger.info(f"SDK google-generativeai versão: {genai.__version__}")
+
+        # 1. Configurar API Key (essencial antes de criar o modelo)
+        genai.configure(api_key=API_KEY)
+        logger.info("Gemini SDK configurado com API Key.")
+
+        # 2. Preparar Configs (usando 'genai' diretamente)
+        # Configuração de Geração
+        generation_config = genai.GenerationConfig(
+            candidate_count=1,
+            temperature=0.2, # Exemplo de temperatura
+            # max_output_tokens=4096, # Exemplo
+            # stop_sequences=["\nHuman:", "\nUsuario:"] # Exemplo
+        )
+        # Ferramentas (Exemplo: Habilitar busca - REMOVA se não quiser)
+        # tools = [genai.Tool(google_search_retrieval=genai.GoogleSearchRetrieval())]
+        
+                # (Dentro do try...except de inicialização do Gemini em main)
+        # ... (após definir generation_config) ...
+
+        # --- SUBSTITUIÇÃO: Definir Ferramentas usando 'genai' diretamente ---
+        logger.info("Configurando ferramentas Gemini...")
+        tools = [] # Começa com lista vazia por segurança
+        try:
+            # Verifica se o módulo 'genai' foi importado e está disponível
+            if genai:
+                # Tenta obter as classes necessárias diretamente do módulo 'genai'
+                # Usar getattr é mais seguro caso alguma classe não exista em certas versões
+                ToolClass = getattr(genai, 'Tool', None)
+                CodeExecutionClass = getattr(genai, 'CodeExecution', None)
+                GoogleSearchClass = getattr(genai, 'GoogleSearch', None)
+                # FunctionDeclaration geralmente vem de glm, se precisar:
+                # FunctionDeclarationClass = getattr(glm, 'FunctionDeclaration', None)
+
+                # Verifica se conseguiu obter as classes necessárias
+                if ToolClass and CodeExecutionClass and GoogleSearchClass:
+                    # Monta a lista de ferramentas usando as classes encontradas
+                    # Adicione ou remova ferramentas conforme sua necessidade
+                    tools = [
+                        ToolClass(code_execution=CodeExecutionClass()),
+                        ToolClass(google_search=GoogleSearchClass()),
+                        # Exemplo se fosse usar Function Calling:
+                        # ToolClass(function_declarations=[
+                        #     FunctionDeclarationClass(name='minha_funcao', description='...', parameters=...)
+                        # ])
+                    ]
+                    logger.info("Ferramentas Gemini (CodeExecution, GoogleSearch) configuradas com sucesso.")
+                else:
+                    # Loga quais classes não foram encontradas
+                    missing = [cls_name for cls_name, cls_obj in [('Tool', ToolClass), ('CodeExecution', CodeExecutionClass), ('GoogleSearch', GoogleSearchClass)] if cls_obj is None]
+                    logger.warning(f"Não foi possível encontrar as classes de ferramentas ({', '.join(missing)}) no módulo 'genai'. Nenhuma ferramenta será usada.")
+                    tools = [] # Garante que a lista está vazia
+            else:
+                logger.warning("Módulo 'genai' não disponível. Nenhuma ferramenta Gemini será usada.")
+                tools = [] # Garante que a lista está vazia
+
+        except AttributeError as e_tool_attr:
+            logger.warning(f"Erro de atributo ao configurar ferramentas Gemini (API mudou?): {e_tool_attr}. Nenhuma ferramenta será usada.")
+            tools = []
+        except Exception as e_tool_other:
+            logger.error(f"Erro inesperado ao configurar ferramentas Gemini: {e_tool_other}", exc_info=True)
+            tools = []
+        # --- FIM DA SUBSTITUIÇÃO ---
+
+        # Log final sobre as ferramentas (já estava lá, mas confirma)
+        logger.info(f"Configuração de Ferramentas: {'Sim (' + str(len(tools)) + ')' if tools else 'Não'}")
+
+        # 3. Instanciar o Modelo Generativo (AQUI que o 'client' é criado!)
+        # (O restante da inicialização do client continua igual)
+        client = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            system_instruction=SYSTEM_INSTRUCTION,
+            generation_config=generation_config,
+            tools=tools if tools else None # Passa a lista 'tools' definida acima
+            # safety_settings=[...]
+        )
+    
+    
+    
+    # Deixe vazio se não usar ferramentas
+
+        logger.info(f"Configuração de Geração: {generation_config}")
+        logger.info(f"Configuração de Ferramentas: {'Sim' if tools else 'Não'}")
+
+        # 3. Instanciar o Modelo Generativo (AQUI que o 'client' é criado!)
+        client = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,         # Usa o modelo dos args/default
+            system_instruction=SYSTEM_INSTRUCTION, # Passa a instrução do sistema global
+            generation_config=generation_config, # Passa a config de geração
+            tools=tools if tools else None       # Passa as ferramentas (ou None)
+            # safety_settings=[...] # Adicione configurações de segurança se necessário
+        )
+        # ---> ESTA LINHA ACIMA É A QUE CRIA O OBJETO 'client' <---
+
+        logger.info(f"SUCESSO: Cliente GenerativeModel para '{GEMINI_MODEL}' criado e atribuído à variável 'client'.")
+
+    except ImportError as imp_err:
+        logger.critical(f"FALHA: Biblioteca 'google.generativeai' não encontrada durante inicialização final: {imp_err}")
+        client = None # Garante que client é None se import falhar
+    except AttributeError as attr_err:
+        logger.critical(f"FALHA: Atributo não encontrado no SDK Gemini (Versão incompatível? Chave inválida?): {attr_err}", exc_info=False)
+        client = None # Garante que client é None
+    except Exception as e_init:
+        logger.critical(f"FALHA CRÍTICA ao inicializar cliente Gemini: {e_init}", exc_info=True)
+        client = None # Garante que client é None
+
+    # --- LOG DIAGNÓSTICO IMPORTANTE ---
+    # Verifica se o 'client' foi realmente criado após o try/except
+    if client:
+        logger.info("VERIFICAÇÃO PÓS-INIT: Objeto 'client' Gemini FOI inicializado.")
+    else:
+        logger.error("VERIFICAÇÃO PÓS-INIT: Objeto 'client' Gemini NÃO FOI inicializado (continua None). A task Gemini Manager falhará.")
+        # Considerar encerrar se Gemini for essencial:
+        # logger.critical("Gemini é essencial e não inicializou. Encerrando.")
+        # sys.exit(1)
+
+    # --- FIM DO BLOCO DE INICIALIZAÇÃO DO GEMINI ---
 
 
-
-
-
-    # --- Configuração de Geração (para chat.send_message_async) ---
-    # Nota: Para a API *Live* (`start_chat`), a configuração é diferente e
-    # passada no `client.aio.live.connect`. Mantendo a lógica da análise
-    # que se baseava no live connect. A API mudou, gemini-flash-live não existe mais (07/2024).
-    # Precisaremos usar `start_chat` provavelmente.
-
-    # Config para `start_chat` (assume áudio input/output)
-    generation_config = genai.types.GenerationConfig(
-        candidate_count=1,
-        # stop_sequences=["..."], # Opcional
-        # max_output_tokens=..., # Opcional
-        temperature=0.7, # Ajustar para criatividade vs factualidade
-    )
-
-    # Ferramentas - Ainda relevante
-    tools = [
-        # genai.protos.Tool(...) # Sintaxe nova pode ser necessária
-        # Adicionar ferramentas aqui se usar function calling, search, etc.
-    ]
-
-    logger.info("Cliente Google GenAI inicializado.")
-
-except ImportError:
-    logger.critical("Biblioteca 'google-genai' não encontrada. Instale com 'pip install google-genai'. Encerrando.")
-    sys.exit(1)
-except Exception as e:
-    logger.critical(f"Erro crítico ao inicializar o cliente Gemini: {e}", exc_info=True)
-    sys.exit(1)
-finally:
-    # Código que sempre será executado (ex.: limpeza)
-    logger.info("Bloco try finalizado.")
 
 # --- Inicialização PyAudio ---
 pya = None
@@ -547,13 +637,30 @@ def midas_depth_to_meters(midas_raw_value: float | None, depth_map: np.ndarray |
 
 # --- Classe Principal AudioLoop ---
 
+# --- Classe Principal AudioLoop ---
+
 class AudioLoop:
-    def __init__(self, video_mode=DEFAULT_VIDEO_MODE, user_name=DEFAULT_USER_NAME, device='cpu'):
+    # ADICIONADO: gemini_client, genai_module, glm_module aos parâmetros
+    def __init__(self, video_mode=DEFAULT_VIDEO_MODE, user_name=DEFAULT_USER_NAME, device='cpu', gemini_client=None, genai_module=None, glm_module=None):
         """Inicializa o sistema do assistente."""
         self.video_mode = video_mode
         self.user_name = user_name
-        self.device = device # Dispositivo para modelos de IA ('cpu' ou 'cuda')
-        logger.info(f"Inicializando AudioLoop: Modo Vídeo='{video_mode}', User='{user_name}', Device='{device}'")
+        self.device = device
+        # ADICIONADO: Armazena as referências passadas como atributos da instância
+        self.gemini_client = gemini_client
+        self.genai = genai_module
+        self.glm = glm_module
+        # --- FIM DAS LINHAS ADICIONADAS/MODIFICADAS ---
+
+        logger.info(f"Inicializando AudioLoop: Modo Vídeo='{self.video_mode}', User='{self.user_name}', Device='{self.device}'")
+        # Log de verificação
+        if self.gemini_client:
+            logger.info(f"AudioLoop recebeu instância do cliente Gemini.")
+        else:
+            logger.warning("AudioLoop NÃO recebeu instância do cliente Gemini.")
+
+        # --- Async Queues ---
+        # (O restante do __init__ continua igual)
 
         # --- Async Queues ---
         # Essas filas são a espinha dorsal da comunicação entre as tasks assíncronas
@@ -1756,17 +1863,22 @@ class AudioLoop:
     async def gemini_communication_manager(self):
         """
         Gerencia a sessão de chat multimodal com Gemini 1.5+ (`start_chat`).
-        Envia dados das filas de saída (áudio mic, vídeo, contexto, texto cmd)
-        e recebe respostas (áudio, texto), colocando-as nas filas de entrada apropriadas.
+        Usa o cliente Gemini e módulos armazenados em 'self'.
         """
-        if not client or not genai:
-             logger.error("Task Gemini Manager não iniciada - Cliente GenAI indisponível.")
+        # Verifica se os componentes necessários foram passados para a instância
+        if not self.gemini_client or not self.genai or not self.glm:
+             logger.error("Task Gemini Manager não iniciada - Instância do cliente Gemini (self.gemini_client) ou módulos (self.genai/self.glm) não disponíveis na classe AudioLoop.")
              self.shutdown_event.set()
              return
-        logger.info("Gemini Communication Manager Task iniciada.")
+        logger.info("Gemini Communication Manager Task iniciada (usando self.gemini_client).")
 
-        chat = None # Guarda o objeto de chat multimodal
-        history = [] # Armazena histórico da conversa para reenviar se necessário
+        # Cria aliases locais para os módulos/cliente para facilitar a leitura
+        genai_local = self.genai
+        glm_local = self.glm
+        local_client_instance = self.gemini_client
+
+        chat = None # Armazena a sessão de chat ativa *desta task*
+        history = [] # Histórico para esta sessão de chat
 
         # --- Loop Principal de Gerenciamento da Sessão de Chat ---
         while not self.shutdown_event.is_set():
@@ -1774,86 +1886,74 @@ class AudioLoop:
                 # 1. Iniciar ou Reiniciar a Sessão de Chat se necessário
                 if chat is None:
                      logger.info("Iniciando nova sessão de chat multimodal com Gemini...")
-                     # start_chat() é o método para conversas multimodais contínuas
-                     # Habilita o envio de áudio automaticamente
-                     chat = client.start_chat(
-                         # enable_automatic_decoding=True, # Decodifica audio/video automaticamente? Verificar doc.
-                         history=history # Reenvia histórico se estiver reconectando
-                         )
-                     self.chat_session = chat # Armazena sessão ativa
-                     logger.info("Sessão de chat multimodal com Gemini iniciada.")
-                     # Enviar prompt inicial ou esperar primeiro input? Esperar.
-
+                     # --- CORRIGIDO: Usa 'local_client_instance' (que veio de self.gemini_client) ---
+                     chat = local_client_instance.start_chat(history=history)
+                     # -----------------------------------------------------------------------------
+                     logger.info("Sessão de chat multimodal iniciada com sucesso.")
 
                 # 2. Esperar por qualquer tipo de Input para Enviar
-                #    (Mic Audio, Video Frame, Context String, Text Command)
-                #    Usa asyncio.wait para esperar pelo primeiro item disponível em qualquer fila de saída.
                 tasks_waiting = {}
                 tasks_waiting["mic"] = asyncio.create_task(self.mic_audio_out_queue.get())
                 tasks_waiting["video"] = asyncio.create_task(self.video_frame_out_queue.get())
                 tasks_waiting["context"] = asyncio.create_task(self.context_injection_queue.get())
                 tasks_waiting["text_cmd"] = asyncio.create_task(self.text_command_out_queue.get())
-                tasks_waiting["shutdown"] = asyncio.create_task(self.shutdown_event.wait()) # Para detectar shutdown
+                tasks_waiting["shutdown"] = asyncio.create_task(self.shutdown_event.wait())
 
-                # Espera o PRIMEIRO item ficar pronto (ou shutdown)
-                # Timeout pequeno para permitir checar shutdown_event periodicamente? Ou deixar wait?
                 done, pending = await asyncio.wait(
-                    tasks_waiting.values(), return_when=asyncio.FIRST_COMPLETED #, timeout=1.0
+                    tasks_waiting.values(), return_when=asyncio.FIRST_COMPLETED
                 )
 
-                # Checar se o shutdown foi o que completou
                 if tasks_waiting["shutdown"] in done:
                     logger.info("Shutdown detectado no Gemini Manager. Encerrando...")
-                    # Cancela tasks pendentes de 'get'
                     for task in pending: task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True) # Espera cancelamentos
-                    break # Sai do loop while
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    break
 
-                # 3. Processar Inputs que Chegaram e Enviar para Gemini
-                send_error = None
-                content_parts = [] # Lista para agrupar partes a serem enviadas juntas (se possível)
+                # 3. Processar Inputs que Chegaram e Montar Partes
+                content_parts = []
+                queues_to_mark_done = [] # Guarda tuplas (queue, data) para marcar done depois
 
                 for task in done:
-                    task_name = [name for name, t in tasks_waiting.items() if t == task][0] # Recupera nome da task
-                    queue = getattr(self, f"{task_name}_out_queue", None) # Encontra a fila original
+                    task_name = [name for name, t in tasks_waiting.items() if t == task][0]
+                    queue = getattr(self, f"{task_name}_out_queue", None) # Ex: self.mic_audio_out_queue
 
                     if task.cancelled():
-                         #logger.debug(f"Task de get '{task_name}' foi cancelada.")
-                         if queue: queue.task_done() # Marca como feito na fila se cancelado? Sim.
+                         if queue: queues_to_mark_done.append((queue, None)) # Marca done mesmo se cancelado
                          continue
                     if task.exception():
                          ex = task.exception()
                          logger.error(f"Erro ao obter dados da fila '{task_name}': {ex}")
-                         if queue: queue.task_done() # Marca como feito na fila mesmo com erro
-                         # Considerar encerrar a task principal se erro for grave?
+                         if queue: queues_to_mark_done.append((queue, None)) # Marca done mesmo com erro
                          continue
 
-                    # Se chegou aqui, task completou com sucesso
                     data = task.result()
-                    if queue: queue.task_done() # Marca como feito na fila original
+                    if queue: queues_to_mark_done.append((queue, data)) # Adiciona à lista para marcar done
 
-                    # Montar o conteúdo para send_message_async
+                    # Montar o conteúdo usando glm_local
                     if task_name == "mic" and isinstance(data, dict) and "data" in data:
-                         # logger.debug(f"Preparando chunk de áudio Mic ({len(data['data'])} bytes) para envio.")
-                         # API v1.5+ - passar bytes diretamente como parte
-                         # Mimetype audio/l16;rate=16000 ou similar
-                         content_parts.append(glm.Part(inline_data=glm.Blob(mime_type=data.get('mime_type', 'audio/l16;rate=16000'), data=data['data'])))
-
+                         # --- CORRIGIDO: Usa glm_local ---
+                         content_parts.append(glm_local.Part(inline_data=glm_local.Blob(mime_type=data.get('mime_type', 'audio/l16;rate=16000'), data=data['data'])))
                     elif task_name == "video" and isinstance(data, dict) and "data" in data:
-                         # logger.debug(f"Preparando frame de vídeo ({len(data['data'])} bytes) para envio.")
-                         # API v1.5+ - passar bytes diretamente como parte
-                         content_parts.append(glm.Part(inline_data=glm.Blob(mime_type=data.get('mime_type', 'image/jpeg'), data=data['data'])))
-
+                         # --- CORRIGIDO: Usa glm_local ---
+                         content_parts.append(glm_local.Part(inline_data=glm_local.Blob(mime_type=data.get('mime_type', 'image/jpeg'), data=data['data'])))
                     elif task_name == "context" and isinstance(data, str) and data:
-                         # logger.debug(f"Preparando string de contexto para envio.")
-                         # Texto é enviado como Part simples
-                         content_parts.append(glm.Part(text=data))
-
+                         # --- CORRIGIDO: Usa glm_local ---
+                         content_parts.append(glm_local.Part(text=data))
                     elif task_name == "text_cmd" and isinstance(data, str) and data:
-                         # logger.debug(f"Preparando comando de texto para envio.")
-                         content_parts.append(glm.Part(text=data))
+                         # --- CORRIGIDO: Usa glm_local ---
+                         content_parts.append(glm_local.Part(text=data))
 
-                # Cancela tasks que não completaram para pegar dados mais recentes na próxima iteração
+                # Marca as tarefas das filas como concluídas APÓS processar os dados
+                for q, item_data in queues_to_mark_done:
+                    try:
+                        q.task_done()
+                    except ValueError: # Se task_done() for chamado mais vezes que put()
+                        logger.warning(f"Tentativa de chamar task_done() em fila já vazia ou desbalanceada: {q}")
+                    except Exception as e_done:
+                        logger.error(f"Erro ao chamar task_done() na fila: {e_done}")
+
+
+                # Cancela tasks pendentes
                 for task in pending:
                     if not task.done(): task.cancel()
                 if pending: await asyncio.gather(*pending, return_exceptions=True)
@@ -1863,86 +1963,59 @@ class AudioLoop:
                 if content_parts and chat:
                     send_start_time = time.monotonic()
                     try:
-                        # logger.info(f"Enviando {len(content_parts)} partes para Gemini...")
-                        # Stream=True para receber respostas enquanto são geradas
-                        # ATENÇÃO: API pode ter mudado! `chat.send_message_async` existe?
-                        # Se não, pode ser só `chat.send_message` síncrono ou
-                        # uma forma diferente de lidar com stream de request/response.
-                        # **Assumindo `send_message_async` ou similar**
                         response_stream = await chat.send_message_async(content_parts, stream=True)
                         send_elapsed = time.monotonic() - send_start_time
                         # logger.debug(f"Gemini send_message_async took {send_elapsed:.3f}s")
 
-
-                        # 5. Processar Resposta (Stream) do Gemini de forma assíncrona
-                        # Itera sobre o stream de resposta para pegar chunks de áudio/texto
-                        # TODO: Esta parte precisa rodar *em paralelo* com o envio/espera do próximo input?
-                        # Sim, idealmente. Senão a resposta só começa a ser processada depois do envio.
-                        # Poderia lançar uma sub-task aqui para processar 'response_stream'?
-                        # Por simplicidade, processa aqui sequencialmente por enquanto.
-
-                        # logger.debug("Aguardando e processando resposta do Gemini...")
+                        # 5. Processar Resposta (Stream)
                         async for chunk in response_stream:
-                            # Verificar se o shutdown foi ativado enquanto processa
-                            if self.shutdown_event.is_set():
-                                logger.info("Shutdown detectado durante processamento de resposta Gemini.")
-                                break # Sai do loop de processamento de chunk
+                            if self.shutdown_event.is_set(): break
 
-                            # -- Processar Texto --
+                            # Processar Texto
                             if hasattr(chunk, 'text') and chunk.text:
-                                # logger.info(f"[Gemini Text]: {chunk.text}")
-                                # Coloca texto na fila apropriada (se houver alguma task ouvindo)
                                 await self._queue_put_robust(self.gemini_text_in_queue, chunk.text, "Gemini Text In", drop_oldest_if_full=False)
 
-                            # -- Processar Áudio --
-                            # A API v1.5 parece não retornar áudio diretamente nos chunks do chat stream?
-                            # Precisa verificar a documentação!
-                            # Pode ser necessário usar Text-to-Speech separadamente ou uma API específica live.
-                            # **Assumindo PLACEHOLDER que 'chunk' pode ter 'audio_content'**
-                            if hasattr(chunk, 'audio_content') and chunk.audio_content:
-                                audio_bytes = chunk.audio_content
-                                # logger.debug(f"Recebido chunk de áudio Gemini ({len(audio_bytes)} bytes).")
-                                # Coloca bytes de áudio na fila para playback
-                                await self._queue_put_robust(self.gemini_audio_in_queue, audio_bytes, "Gemini Audio In", drop_oldest_if_full=True)
+                            # Processar Áudio (se houver)
+                            if hasattr(chunk, 'parts'):
+                                for part in chunk.parts:
+                                     if hasattr(part, 'inline_data') and part.inline_data.mime_type.startswith('audio/'):
+                                         await self._queue_put_robust(self.gemini_audio_in_queue, part.inline_data.data, "Gemini Audio In", drop_oldest_if_full=True)
+                                         break # Assume um audio por chunk
 
-                            # -- Processar Chamadas de Função (Tool Calls) -- (Se usar)
-                            # if hasattr(chunk, 'function_calls') and chunk.function_calls:
-                            #     logger.info(f"[Gemini Function Call]: {chunk.function_calls}")
-                                # Implementar lógica para executar a função e retornar o resultado
+                            # Processar Function Calls (se houver)
+                            # if hasattr(chunk, 'function_calls')...
 
-                        # logger.debug("Fim do stream de resposta Gemini para esta mensagem.")
-                        # Atualizar histórico (opcional, pode crescer muito)
-                        # history.append({"role": "user", "parts": content_parts})
-                        # history.append({"role": "model", "parts": [...]}) # Reconstruir resposta do modelo
+                        # Fim do stream
 
+                    # --- CORRIGIDO: Usa genai_local.types para exceções ---
+                    except genai_local.types.BlockedPromptException as block_ex:
+                         logger.error(f"PROMPT BLOQUEADO pela API Gemini: {block_ex}")
+                         # chat = None # Opcional: Forçar reinício do chat
+                    except genai_local.types.StopCandidateException as stop_ex:
+                         logger.warning(f"Geração Gemini interrompida (Stop): {stop_ex}")
+                    # ----------------------------------------------------
                     except Exception as e_send_recv:
-                        logger.error(f"Erro durante envio ou recebimento Gemini: {e_send_recv}", exc_info=True)
-                        send_error = e_send_recv
-                        # Se erro for grave (conexão, autenticação), limpar 'chat' para forçar reconexão
-                        if isinstance(e_send_recv, (genai.types.BlockedPromptException, genai.types.StopCandidateException)):
-                             logger.warning(f"Gemini API bloqueou prompt ou parou: {e_send_recv}")
-                             # Continuar normalmente? Ou limpar chat? Limpar por segurança.
-                             chat = None
-                             self.chat_session = None
-                        elif isinstance(e_send_recv, Exception): # Erro genérico de conexão/API?
-                             logger.warning("Possível problema de conexão/API. Tentando reiniciar chat na próxima iteração.")
-                             chat = None
-                             self.chat_session = None
-                             await asyncio.sleep(5) # Pausa maior antes de tentar reconectar
-
+                        logger.error(f"Erro durante envio/recebimento Gemini: {e_send_recv}", exc_info=True)
+                        chat = None # Força reinício
+                        history.clear()
+                        await asyncio.sleep(5)
+                else:
+                    # Se não há partes para enviar, espera um pouco para não ocupar CPU
+                    await asyncio.sleep(0.05)
 
             except asyncio.CancelledError:
                 logger.info("Gemini Communication Manager Task cancelada.")
-                # Cancela tasks de 'get' pendentes ao sair
-                active_tasks = [t for t in tasks_waiting.values() if not t.done()]
-                for task in active_tasks: task.cancel()
-                if active_tasks: await asyncio.gather(*active_tasks, return_exceptions=True)
-                break # Sai do loop while principal
+                break
             except Exception as e:
-                logger.error(f"Erro crítico inesperado no Gemini Communication Manager: {e}", exc_info=True)
-                chat = None # Força reinicio do chat
-                self.chat_session = None
-                await asyncio.sleep(5) # Espera antes de tentar de novo
+                logger.error(f"Erro crítico inesperado no loop Gemini Communication Manager: {e}", exc_info=True)
+                chat = None # Tenta reiniciar
+                history.clear()
+                await asyncio.sleep(5)
+
+        # --- Limpeza Final ---
+        logger.info("Encerrando sessão de chat com Gemini (se ativa)...")
+        chat = None # Libera referência
+        logger.info("Gemini Communication Manager Task finalizada.")
 
         # --- Limpeza Final ---
         logger.info("Encerrando sessão de chat com Gemini (se ativa)...")
@@ -2131,11 +2204,20 @@ async def main():
 
 
     # --- Criar e Iniciar Instância Principal ---
-    # O AudioLoop pode usar as variáveis globais (se necessário em seu __init__)
-    # ou usar os valores do `args` que são passados.
-    # Atualmente, ele parece usar as globais indiretamente via `_register_active_processors`
-    # que checam as variáveis globais dos modelos (yolo_model, sam_predictor, etc.)
-    audio_loop = AudioLoop(video_mode=args.video_mode, user_name=args.user_name, device=selected_device)
+    try:
+        # ---> SUBSTITUÍDO: Passa 'client', 'genai', e 'glm' definidos DENTRO de main <---
+        audio_loop_instance = AudioLoop(
+            video_mode=args.video_mode,
+            user_name=args.user_name,
+            device=selected_device,
+            gemini_client=client,   # Passa a instância do cliente criada em main
+            genai_module=genai,     # Passa o módulo genai importado em main
+            glm_module=glm          # Passa o módulo glm importado em main
+        )
+        # ---> FIM DA SUBSTITUIÇÃO <---
+    except Exception as loop_init_err:
+         logger.critical(f"Falha CRÍTICA ao inicializar AudioLoop: {loop_init_err}", exc_info=True)
+         sys.exit(1) # Não pode continuar sem a instância principal
 
     # --- Capturar Sinais de Encerramento (Ctrl+C) ---
     loop = asyncio.get_running_loop()
