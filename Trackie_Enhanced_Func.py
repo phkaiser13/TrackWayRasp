@@ -47,7 +47,6 @@ except ImportError:
 except Exception as e:
      print(f"AVISO: Erro ao importar deepface: {e}. DeepFace será desativado.")
 
-
 # --- IMPORTANTE: Ajuste a importação do SAM2 para corresponder à sua biblioteca ---
 # Exemplo: Se usar 'segment-anything' (SAM original):
 # from segment_anything import sam_model_registry, SamPredictor
@@ -56,7 +55,8 @@ sam_model_registry, SamPredictor = None, None
 try:
     # TENTE SUBSTITUIR 'sam2_library' PELO NOME REAL DA BIBLIOTECA NO SEU 'pip list'
     # ou pelo nome do módulo python correto
-    from sam2.build_sam import build_sam2   # <<< AJUSTE ESTA LINHA!
+    from sam2.build_sam import build_sam2 # <<< AJUSTE ESTA LINHA!
+  #  from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator   # <<< E ESSA!
     # Pode ser que 'build_sam' também seja necessário se o registry não for direto
     # from sam2.build_sam import build_sam2 # Se necessário
 except ImportError:
@@ -64,6 +64,9 @@ except ImportError:
      print("       Verifique o nome correto da biblioteca instalada e ajuste a importação.")
 except Exception as e:
      print(f"AVISO: Erro ao importar biblioteca SAM2: {e}. SAM2 será desativado.")
+
+
+
 
 
 vision = None
