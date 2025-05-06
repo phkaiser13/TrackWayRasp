@@ -13,7 +13,7 @@ import sys
 
 # --- Bibliotecas de IA e Processamento ---
 import cv2 # pip install opencv-python
-import pyaudio # pip install pyaudio (pode precisar de portaudio dev lib)
+import pyaudio # pip install pyaudio (pode precisar de portaudio dev lib: sudo apt-get install portaudio19-dev python3-pyaudio)
 import PIL.Image # pip install Pillow
 import mss # pip install mss
 import numpy as np # pip install numpy
@@ -31,7 +31,7 @@ except Exception as e:
 
 DPTImageProcessor, DPTForDepthEstimation = None, None
 try:
-    from transformers import DPTImageProcessor, DPTForDepthEstimation # pip install transformers
+    from transformers import DPTImageProcessor, DPTForDepthEstimation # pip install transformers[torch] ou pip install transformers
 except ImportError:
      print("AVISO: Biblioteca 'transformers' não encontrada. MiDaS via transformers será desativado.")
 except Exception as e:
@@ -53,21 +53,20 @@ except Exception as e:
 # Se for uma biblioteca 'sam2' específica, verifique os nomes corretos
 sam_model_registry, SamPredictor = None, None
 try:
-    # TENTE SUBSTITUIR 'sam2_library' PELO NOME REAL DA BIBLIOTECA NO SEU 'pip list'
-    # ou pelo nome do módulo python correto
-    from sam2.build_sam import build_sam2 # <<< AJUSTE ESTA LINHA!
-  #  from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator   # <<< E ESSA!
-    # Pode ser que 'build_sam' também seja necessário se o registry não for direto
-    # from sam2.build_sam import build_sam2 # Se necessário
+    # ### AJUSTE NECESSÁRIO ###
+    # TENTE SUBSTITUIR 'segment_anything' PELO NOME REAL DA BIBLIOTECA NO SEU 'pip list'
+    # ou pelo nome do módulo python correto. O código abaixo assume a biblioteca original 'segment-anything'.
+    # Se você instalou uma fork chamada 'sam2', a importação será diferente!
+    from segment_anything import sam_model_registry, SamPredictor # <<< AJUSTE ESTA LINHA SE NECESSÁRIO!
+    print("INFO: Usando 'segment_anything' para SAM. Ajuste a importação se usar outra biblioteca.")
+    # Se sua biblioteca for diferente, você pode precisar importar outras coisas, como:
+    # from sam2.build_sam import build_sam2
+    # from sam2.predictor import SamPredictor # Exemplo hipotético
 except ImportError:
-     print("AVISO: Biblioteca 'sam2_library' (ou similar para SAM2) não encontrada. SAM2 será desativado.")
-     print("       Verifique o nome correto da biblioteca instalada e ajuste a importação.")
+     print("AVISO: Biblioteca 'segment_anything' (ou similar para SAM/SAM2) não encontrada. SAM será desativado.")
+     print("       Verifique o nome correto da biblioteca instalada ('pip list | grep sam') e ajuste a importação.")
 except Exception as e:
-     print(f"AVISO: Erro ao importar biblioteca SAM2: {e}. SAM2 será desativado.")
-
-
-
-
+     print(f"AVISO: Erro ao importar biblioteca SAM/SAM2: {e}. SAM será desativado.")
 
 vision = None
 try:
@@ -79,27 +78,35 @@ except Exception as e:
 
 # --- Configurações Globais (Idealmente movidas para um arquivo de config ou args) ---
 # Modelos e APIs
-YOLO_MODEL_PATH = "/home/raspsenai/yolov8n.pt"
-SAM2_CONFIG_PATH = "/home/raspsenai/sam2/sam2/configs/sam2.1/sam2.1_hiera_l.yaml"
-SAM2_MODEL_TYPE = "hiera_large"
-SAM2_CHECKPOINT_PATH = "/home/raspsenai/sam2/checkpoints/sam2.1_hiera_large.pt"
-MIDAS_MODEL_NAME = "Intel/dpt-swinv2-large-384"
-MIDAS_WEIGHTS_PATH = "/home/raspsenai/MiDaS/weights/dpt_swin2_large_384.pt"
-KNOWN_FACES_DIR = "/home/raspsenai/known_faces"
-VISION_API_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/raspsenai/google-json-creds.json")
-GEMINI_MODEL = "models/gemini-2.0-flash-live-001"
-API_KEY = os.getenv("GEMINI_API_KEY")
+# ### AJUSTE NECESSÁRIO ### - Verifique e corrija TODOS os caminhos abaixo
+YOLO_MODEL_PATH = "/home/raspsenai/yolov8n.pt" # Exemplo: /path/to/your/yolov8n.pt
+# SAM_MODEL_TYPE: O tipo DEVE corresponder aos tipos disponíveis no `sam_model_registry` da biblioteca importada
+# Tipos comuns para 'segment-anything': "vit_h", "vit_l", "vit_b"
+SAM_MODEL_TYPE = "vit_h" # Exemplo: "vit_h" (Huge), "vit_l" (Large), "vit_b" (Base) - AJUSTE CONFORME SEU CHECKPOINT
+SAM_CHECKPOINT_PATH = "/home/raspsenai/sam_vit_h_4b8939.pth" # Exemplo: /path/to/your/sam_vit_h_4b8939.pth
+MIDAS_MODEL_NAME = "Intel/dpt-large" # Modelo MiDaS v3.1 (DPT Large) - bom equilíbrio
+# MIDAS_MODEL_NAME = "Intel/dpt-hybrid-midas" # Modelo híbrido (mais rápido, menos preciso)
+# MIDAS_MODEL_NAME = "Intel/dpt-swinv2-large-384" # Modelo usado no código original (requer transformers >= 4.36?)
+# MIDAS_WEIGHTS_PATH = "/home/raspsenai/MiDaS/weights/dpt_swin2_large_384.pt" # Não é mais necessário com from_pretrained
+KNOWN_FACES_DIR = "/home/raspsenai/known_faces" # Exemplo: /path/to/your/known_faces
+VISION_API_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/raspsenai/google-json-creds.json") # Exemplo: /path/to/your/credentials.json
+GEMINI_MODEL_NAME = "gemini-1.5-flash-latest" # Usar o modelo mais recente recomendado (Julho 2024)
+# GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest" # Modelo Pro (mais poderoso, mais caro)
+API_KEY = os.getenv("GEMINI_API_KEY") # Pega a chave da variável de ambiente
 
 # Outras Configurações
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-SEND_SAMPLE_RATE = 16000 # Taxa de envio para Gemini
-RECEIVE_SAMPLE_RATE = 24000 # Taxa de recebimento de Gemini (pode variar)
+SEND_SAMPLE_RATE = 16000 # Taxa de envio para Gemini (padrão comum)
+RECEIVE_SAMPLE_RATE = 24000 # Taxa de recebimento de Gemini (padrão comum para TTS deles)
 CHUNK_SIZE = 1024 # Tamanho do chunk de áudio
-VIDEO_FPS_TARGET = 3  # Frames por segundo alvo para processamento de IA (não captura)
-CONTEXT_INJECTION_INTERVAL = 4 # Segundos entre injeções de contexto
+VIDEO_FPS_TARGET = 5  # Frames por segundo alvo para processamento de IA (não captura) - Aumentado um pouco
+CONTEXT_INJECTION_INTERVAL = 5 # Segundos entre injeções de contexto - Aumentado um pouco
 DEFAULT_VIDEO_MODE = "camera" # Ou "screen", "none"
 DEFAULT_USER_NAME = "Usuário"
+
+# --- Instrução do Sistema para o Gemini ---
+# Mantida como no original
 SYSTEM_INSTRUCTION = """
 Você é Trackie (pronuncia-se 'Tréqui'), uma IA assistente integrada a um dispositivo vestível, projetada para auxiliar pessoas com deficiência visual, especialmente em ambientes como oficinas, fábricas ou laboratórios. Seu objetivo principal é fornecer informações sobre o ambiente de forma clara, concisa e segura em português do Brasil.
 
@@ -113,7 +120,7 @@ Você é Trackie (pronuncia-se 'Tréqui'), uma IA assistente integrada a um disp
 6.  **Leitura de Texto (OCR):** Quando detectar texto (via OCR fornecido pelo sistema como "Texto: '...'"), leia-o se parecer relevante (placas, etiquetas de aviso, nomes em crachás). Exemplo: "Usuário, uma placa na parede diz: 'PERIGO - Alta Voltagem'". Seja conciso.
 7.  **Reconhecimento Facial:** Você receberá informações sobre pessoas identificadas ("Pessoas: Nome1 (2.5m), Pessoa Desconhecida (4.0m)"). Use essa informação para responder perguntas como "Quem está na minha frente?". Exemplo: "Usuário, a pessoa a uns 4 passos à sua frente é Ana Silva." (2.5 / 0.7 ≈ 4 passos). Se um rosto não for reconhecido, diga "Usuário, há uma pessoa não reconhecida a cerca de 6 passos à sua frente." (4.0 / 0.7 ≈ 6 passos).
 8.  **Comandos Naturais:** Entenda e responda a comandos como: "Onde está a saída?", "O que é esse objeto perto da minha mão esquerda?", "Leia a placa na parede.", "Tem alguém vindo?".
-9.  **INFORMAÇÕES DE CONTEXTO DO SISTEMA:** Você receberá periodicamente mensagens iniciadas com `[CONTEXTO_SISTEMA]`. Essas mensagens contêm dados processados da câmera e outros sensores (objetos detectados por YOLO com distância em metros, segmentação SAM2 [interpretar como descrição geral da cena], profundidade por MiDaS [usada para as distâncias], rostos por DeepFace com distância, texto por OCR). **É ESSENCIAL que você UTILIZE essas informações** para compor suas respostas, calcular distâncias (convertendo metros para passos), avaliar perigos e descrever o ambiente de forma precisa. Não leia a mensagem `[CONTEXTO_SISTEMA]` para o usuário, apenas use os dados dela para formular sua resposta em linguagem natural. Ignore itens com '(dist?)' se não for relevante mencioná-los sem distância. O sumário de 'Segmentos' dá uma ideia do que ocupa mais espaço na visão (ex: parede, chão, mesa).
+9.  **INFORMAÇÕES DE CONTEXTO DO SISTEMA:** Você receberá periodicamente mensagens iniciadas com `[CONTEXTO_SISTEMA]`. Essas mensagens contêm dados processados da câmera e outros sensores (objetos detectados por YOLO com distância em metros, segmentação SAM [interpretar como descrição geral da cena], profundidade por MiDaS [usada para as distâncias], rostos por DeepFace com distância, texto por OCR). **É ESSENCIAL que você UTILIZE essas informações** para compor suas respostas, calcular distâncias (convertendo metros para passos), avaliar perigos e descrever o ambiente de forma precise. Não leia a mensagem `[CONTEXTO_SISTEMA]` para o usuário, apenas use os dados dela para formular sua resposta em linguagem natural. Ignore itens com '(dist?)' se não for relevante mencioná-los sem distância. O sumário de 'Segmentos' dá uma ideia do que ocupa mais espaço na visão (ex: parede, chão, mesa).
 10. **Tom de Voz:** Mantenha um tom de voz calmo, prestativo e seguro. Aumente a urgência apenas para avisos de perigo. Use a voz pré-definida se aplicável à API (a configuração é externa).
 11. **Incerteza:** Se a visão estiver obstruída, a imagem ou o som estiverem ruins, informe ao usuário. Ex: "Usuário, não consigo ver claramente agora, a câmera parece obstruída." ou "Usuário, o som está muito ruidoso, pode repetir?". Se o contexto recebido for vazio ou limitado, diga algo como "Usuário, a visão do ambiente está limitada no momento."
 
@@ -121,11 +128,7 @@ Você é Trackie (pronuncia-se 'Tréqui'), uma IA assistente integrada a um disp
 Se receber: `[CONTEXTO_SISTEMA] Objetos: cadeira (2.1m), mesa (3.0m), faca (dist?). Pessoas: Ana Silva (3.5m), Pessoa Desconhecida (1.5m). Texto: 'SAIDA'. Segmentos: [Seg1(Area:15000,IoU:0.9), Seg2(Area:8000,IoU:0.8)] (2 máscaras total)` (Assume que segmentos são objetos não identificados ou partes grandes como parede/chão)
 Sua descrição ou resposta poderia ser: "Usuário, à sua frente vejo uma Pessoa Desconhecida a cerca de 2 passos (1.5/0.7≈2). Mais adiante, a Ana Silva está a uns 5 passos (3.5/0.7≈5). Há também uma cadeira a 3 passos (2.1/0.7≈3) e uma mesa a cerca de 4 passos (3.0/0.7≈4). Vejo também o que parece ser uma faca por perto, mas não sei a distância exata. Uma placa escrita 'SAIDA' está visível."
 """
-# Defina a instrução do sistema como uma variável separada
 
-
-
-    
 # --- Configuração de Logging ---
 logging.basicConfig(
     level=logging.INFO,
@@ -133,10 +136,13 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 # Desativar logs muito verbosos de bibliotecas de terceiros, se necessário
-# logging.getLogger("ultralytics").setLevel(logging.WARNING)
-# logging.getLogger("transformers").setLevel(logging.WARNING)
-# logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-# logging.getLogger("deepface").setLevel(logging.WARNING)
+logging.getLogger("ultralytics").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("deepface").setLevel(logging.WARNING)
+# Silenciar logs de aviso do PyAudio sobre buffer ALSA (comum e geralmente inofensivo)
+logging.getLogger("pyaudio").setLevel(logging.ERROR)
+
 
 logger = logging.getLogger("TrackieAssist") # Logger específico para a aplicação
 
@@ -145,144 +151,45 @@ if not API_KEY:
     logger.critical("API Key do Gemini não configurada! Defina a variável de ambiente 'GEMINI_API_KEY'. Encerrando.")
     sys.exit(1)
 
-# Tentar importar GenAI DEPOIS de checar a key
-    # --- INICIALIZAÇÃO CORRETA DO CLIENTE GEMINI (Aqui, após ler os Args) ---
-    global client, generation_config, tools # Declara que vamos *definir* estas globais aqui
-    client = None # Reseta cliente para garantir que está limpo antes de tentar inicializar
-    generation_config = None
-    tools = []
-    logger.info(f"--- Iniciando Cliente Google GenAI (Modelo: {GEMINI_MODEL}) ---") # Usa o GEMINI_MODEL atualizado pelos args
+# --- Inicialização do Cliente Google GenAI ---
+genai = None
+glm = None
+gemini_client_model = None # Variável para guardar o modelo GenerativeModel inicializado
+try:
+    import google.generativeai as genai
+    from google.ai import generativelanguage as glm # Para tipos Blob, Part
 
-    try:
-        # Tenta importar de novo para garantir (caso tenha falhado antes)
-        # Usa aliases para evitar conflito se 'genai'/'glm' já existirem com outro significado
-        import google.generativeai as genai_core
-        from google.ai import generativelanguage as glm_core
+    logger.info(f"SDK google-genai versão: {genai.__version__}")
 
-        # Atribui aos nomes globais que o resto do código espera
-        genai = genai_core
-        glm = glm_core
-        if not genai: raise ImportError("Falha ao reimportar google.generativeai")
+    # 1. Configurar a API Key
+    genai.configure(api_key=API_KEY)
+    logger.info("Google GenAI SDK configurado com API Key.")
 
-        logger.info(f"SDK google-generativeai versão: {genai.__version__}")
+    # 2. Criar o objeto do Modelo Generativo com a instrução do sistema
+    #    Isso será usado para iniciar chats.
+    gemini_client_model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL_NAME,
+        system_instruction=SYSTEM_INSTRUCTION
+        # Outras configurações como safety_settings podem ser adicionadas aqui
+        # safety_settings=...
+    )
+    logger.info(f"Modelo Generativo Gemini '{GEMINI_MODEL_NAME}' inicializado com instrução do sistema.")
 
-        # 1. Configurar API Key (essencial antes de criar o modelo)
-        genai.configure(api_key=API_KEY)
-        logger.info("Gemini SDK configurado com API Key.")
+    # Configurações de Geração (para `send_message`) - Opcional, pode usar defaults
+    generation_config = genai.types.GenerationConfig(
+        candidate_count=1,
+        # stop_sequences=["..."], # Opcional
+        # max_output_tokens=..., # Opcional
+        temperature=0.7, # Ajustar para criatividade vs factualidade
+    )
+    # Nota: As ferramentas (tools) seriam adicionadas aqui se usadas
 
-        # 2. Preparar Configs (usando 'genai' diretamente)
-        # Configuração de Geração
-        generation_config = genai.GenerationConfig(
-            candidate_count=1,
-            temperature=0.2, # Exemplo de temperatura
-            # max_output_tokens=4096, # Exemplo
-            # stop_sequences=["\nHuman:", "\nUsuario:"] # Exemplo
-        )
-        # Ferramentas (Exemplo: Habilitar busca - REMOVA se não quiser)
-        # tools = [genai.Tool(google_search_retrieval=genai.GoogleSearchRetrieval())]
-        
-                # (Dentro do try...except de inicialização do Gemini em main)
-        # ... (após definir generation_config) ...
-
-        # --- SUBSTITUIÇÃO: Definir Ferramentas usando 'genai' diretamente ---
-        logger.info("Configurando ferramentas Gemini...")
-        tools = [] # Começa com lista vazia por segurança
-        try:
-            # Verifica se o módulo 'genai' foi importado e está disponível
-            if genai:
-                # Tenta obter as classes necessárias diretamente do módulo 'genai'
-                # Usar getattr é mais seguro caso alguma classe não exista em certas versões
-                ToolClass = getattr(genai, 'Tool', None)
-                CodeExecutionClass = getattr(genai, 'CodeExecution', None)
-                GoogleSearchClass = getattr(genai, 'GoogleSearch', None)
-                # FunctionDeclaration geralmente vem de glm, se precisar:
-                # FunctionDeclarationClass = getattr(glm, 'FunctionDeclaration', None)
-
-                # Verifica se conseguiu obter as classes necessárias
-                if ToolClass and CodeExecutionClass and GoogleSearchClass:
-                    # Monta a lista de ferramentas usando as classes encontradas
-                    # Adicione ou remova ferramentas conforme sua necessidade
-                    tools = [
-                        ToolClass(code_execution=CodeExecutionClass()),
-                        ToolClass(google_search=GoogleSearchClass()),
-                        # Exemplo se fosse usar Function Calling:
-                        # ToolClass(function_declarations=[
-                        #     FunctionDeclarationClass(name='minha_funcao', description='...', parameters=...)
-                        # ])
-                    ]
-                    logger.info("Ferramentas Gemini (CodeExecution, GoogleSearch) configuradas com sucesso.")
-                else:
-                    # Loga quais classes não foram encontradas
-                    missing = [cls_name for cls_name, cls_obj in [('Tool', ToolClass), ('CodeExecution', CodeExecutionClass), ('GoogleSearch', GoogleSearchClass)] if cls_obj is None]
-                    logger.warning(f"Não foi possível encontrar as classes de ferramentas ({', '.join(missing)}) no módulo 'genai'. Nenhuma ferramenta será usada.")
-                    tools = [] # Garante que a lista está vazia
-            else:
-                logger.warning("Módulo 'genai' não disponível. Nenhuma ferramenta Gemini será usada.")
-                tools = [] # Garante que a lista está vazia
-
-        except AttributeError as e_tool_attr:
-            logger.warning(f"Erro de atributo ao configurar ferramentas Gemini (API mudou?): {e_tool_attr}. Nenhuma ferramenta será usada.")
-            tools = []
-        except Exception as e_tool_other:
-            logger.error(f"Erro inesperado ao configurar ferramentas Gemini: {e_tool_other}", exc_info=True)
-            tools = []
-        # --- FIM DA SUBSTITUIÇÃO ---
-
-        # Log final sobre as ferramentas (já estava lá, mas confirma)
-        logger.info(f"Configuração de Ferramentas: {'Sim (' + str(len(tools)) + ')' if tools else 'Não'}")
-
-        # 3. Instanciar o Modelo Generativo (AQUI que o 'client' é criado!)
-        # (O restante da inicialização do client continua igual)
-        client = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=SYSTEM_INSTRUCTION,
-            generation_config=generation_config,
-            tools=tools if tools else None # Passa a lista 'tools' definida acima
-            # safety_settings=[...]
-        )
-    
-    
-    
-    # Deixe vazio se não usar ferramentas
-
-        logger.info(f"Configuração de Geração: {generation_config}")
-        logger.info(f"Configuração de Ferramentas: {'Sim' if tools else 'Não'}")
-
-        # 3. Instanciar o Modelo Generativo (AQUI que o 'client' é criado!)
-        client = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,         # Usa o modelo dos args/default
-            system_instruction=SYSTEM_INSTRUCTION, # Passa a instrução do sistema global
-            generation_config=generation_config, # Passa a config de geração
-            tools=tools if tools else None       # Passa as ferramentas (ou None)
-            # safety_settings=[...] # Adicione configurações de segurança se necessário
-        )
-        # ---> ESTA LINHA ACIMA É A QUE CRIA O OBJETO 'client' <---
-
-        logger.info(f"SUCESSO: Cliente GenerativeModel para '{GEMINI_MODEL}' criado e atribuído à variável 'client'.")
-
-    except ImportError as imp_err:
-        logger.critical(f"FALHA: Biblioteca 'google.generativeai' não encontrada durante inicialização final: {imp_err}")
-        client = None # Garante que client é None se import falhar
-    except AttributeError as attr_err:
-        logger.critical(f"FALHA: Atributo não encontrado no SDK Gemini (Versão incompatível? Chave inválida?): {attr_err}", exc_info=False)
-        client = None # Garante que client é None
-    except Exception as e_init:
-        logger.critical(f"FALHA CRÍTICA ao inicializar cliente Gemini: {e_init}", exc_info=True)
-        client = None # Garante que client é None
-
-    # --- LOG DIAGNÓSTICO IMPORTANTE ---
-    # Verifica se o 'client' foi realmente criado após o try/except
-    if client:
-        logger.info("VERIFICAÇÃO PÓS-INIT: Objeto 'client' Gemini FOI inicializado.")
-    else:
-        logger.error("VERIFICAÇÃO PÓS-INIT: Objeto 'client' Gemini NÃO FOI inicializado (continua None). A task Gemini Manager falhará.")
-        # Considerar encerrar se Gemini for essencial:
-        # logger.critical("Gemini é essencial e não inicializou. Encerrando.")
-        # sys.exit(1)
-
-    # --- FIM DO BLOCO DE INICIALIZAÇÃO DO GEMINI ---
-
-
+except ImportError:
+    logger.critical("Biblioteca 'google-genai' não encontrada. Instale com 'pip install google-generativeai'. Encerrando.")
+    sys.exit(1)
+catch Exception as e:
+    logger.critical(f"Erro crítico ao inicializar o cliente Gemini: {e}", exc_info=True)
+    sys.exit(1)
 
 # --- Inicialização PyAudio ---
 pya = None
@@ -299,7 +206,7 @@ sam_predictor = None # Guarda o objeto predictor do SAM
 midas_processor = None
 midas_model = None
 cloud_vision_client = None
-# deepface_db_path é definido globalmente, usado diretamente
+# deepface_db_path é definido globalmente (KNOWN_FACES_DIR), usado diretamente
 
 # --- Funções Auxiliares ---
 
@@ -312,53 +219,57 @@ def load_models(device: str):
     # --- YOLO ---
     if YOLO and YOLO_MODEL_PATH:
         try:
+            if not os.path.exists(YOLO_MODEL_PATH):
+                 raise FileNotFoundError(f"Arquivo do modelo YOLO não encontrado em {YOLO_MODEL_PATH}")
             logger.info(f"Carregando modelo YOLO de: {YOLO_MODEL_PATH}...")
             yolo_model = YOLO(YOLO_MODEL_PATH)
-            # Forçar modelo para o device correto (ultralytics geralmente faz isso automaticamente, mas pode ser explícito)
+            # Forçar modelo para o device correto (ultralytics geralmente faz isso, mas pode ser explícito)
             # A chamada .to(device) é mais comum em torch puro, yolo() pode ter seu próprio arg
             # Exemplo de predição para forçar carregamento/mover para device
             _ = yolo_model(np.zeros((64, 64, 3), dtype=np.uint8), device=device, verbose=False)
-            logger.info(f"Modelo YOLO '{YOLO_MODEL_PATH}' carregado e testado em {device}.")
-        except FileNotFoundError:
-            logger.error(f"Erro: Arquivo do modelo YOLO não encontrado em {YOLO_MODEL_PATH}")
+            logger.info(f"Modelo YOLO '{os.path.basename(YOLO_MODEL_PATH)}' carregado e testado em {device}.")
+        except FileNotFoundError as e:
+            logger.error(str(e))
             yolo_model = None
         except Exception as e:
             logger.error(f"Falha ao carregar ou testar modelo YOLO: {e}", exc_info=True)
             yolo_model = None
     else:
-        logger.warning("YOLO desativado (biblioteca 'ultralytics' não importada ou YOLO_MODEL_PATH não definido).")
+        logger.warning("YOLO desativado (biblioteca 'ultralytics' não importada ou YOLO_MODEL_PATH não definido/encontrado).")
 
 
-    # --- SAM2 (Segment Anything Model 2 ou similar) ---
+    # --- SAM (Segment Anything Model) ---
     # Presume que sam_model_registry e SamPredictor foram importados corretamente
-    if sam_model_registry and SamPredictor and SAM2_CHECKPOINT_PATH and SAM2_MODEL_TYPE:
+    if sam_model_registry and SamPredictor and SAM_CHECKPOINT_PATH and SAM_MODEL_TYPE:
         try:
-            logger.info(f"Carregando modelo SAM2 tipo '{SAM2_MODEL_TYPE}' do checkpoint: {SAM2_CHECKPOINT_PATH} para {device}...")
+            if not os.path.exists(SAM_CHECKPOINT_PATH):
+                 raise FileNotFoundError(f"Arquivo de checkpoint SAM não encontrado em {SAM_CHECKPOINT_PATH}")
+            logger.info(f"Carregando modelo SAM tipo '{SAM_MODEL_TYPE}' do checkpoint: {SAM_CHECKPOINT_PATH} para {device}...")
             # Instancia o modelo SAM usando o registro de modelos
-            sam_model_instance = sam_model_registry[SAM2_MODEL_TYPE](checkpoint=SAM2_CHECKPOINT_PATH)
+            sam_model_instance = sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_CHECKPOINT_PATH)
             sam_model_instance.to(device=device)
             sam_model_instance.eval() # Modo de avaliação
             # Cria o objeto predictor, que será usado para inferência
             sam_predictor = SamPredictor(sam_model_instance)
-            logger.info("Modelo SAM2 e Predictor carregados com sucesso.")
+            logger.info(f"Modelo SAM '{SAM_MODEL_TYPE}' e Predictor carregados com sucesso.")
             # Teste rápido opcional (requer uma imagem dummy)
             # dummy_img_rgb = np.zeros((128, 128, 3), dtype=np.uint8)
             # sam_predictor.set_image(dummy_img_rgb)
-            # logger.info("SAM2 Predictor testado com set_image.")
-        except FileNotFoundError:
-             logger.error(f"Erro: Checkpoint do SAM2 não encontrado em {SAM2_CHECKPOINT_PATH}")
+            # logger.info("SAM Predictor testado com set_image.")
+        except FileNotFoundError as e:
+             logger.error(str(e))
              sam_predictor = None
         except KeyError:
-             logger.error(f"Erro: Tipo de modelo SAM2 '{SAM2_MODEL_TYPE}' não reconhecido pelo 'sam_model_registry'. Verifique o nome e a biblioteca.")
+             logger.error(f"Erro: Tipo de modelo SAM '{SAM_MODEL_TYPE}' não reconhecido pelo 'sam_model_registry'. Verifique o nome, a biblioteca importada e o checkpoint.")
              sam_predictor = None
         except ImportError: # Captura erro se SamPredictor/registry veio de uma lib não instalada
-            logger.error(f"Erro de Importação ao tentar usar SAM2. A biblioteca está instalada corretamente?")
+            logger.error(f"Erro de Importação ao tentar usar SAM. A biblioteca está instalada corretamente e a importação no código está correta?")
             sam_predictor = None
         except Exception as e:
-            logger.error(f"Falha inesperada ao carregar ou testar modelo SAM2: {e}", exc_info=True)
+            logger.error(f"Falha inesperada ao carregar ou testar modelo SAM: {e}", exc_info=True)
             sam_predictor = None
     else:
-        logger.warning("SAM2 desativado (biblioteca/classes não importadas, checkpoint ou tipo não definidos).")
+        logger.warning("SAM desativado (biblioteca/classes não importadas, checkpoint ou tipo não definidos/encontrados).")
 
 
     # --- MiDaS (usando Transformers) ---
@@ -393,21 +304,27 @@ def load_models(device: str):
          try:
              logger.info("Verificando disponibilidade do DeepFace...")
              # Garante que o diretório DB exista antes de qualquer operação
-             os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
-             logger.info(f"Diretório para banco de dados de faces DeepFace: '{KNOWN_FACES_DIR}' (criado se não existia).")
-             # Teste rápido opcional para forçar carregamento inicial de algum modelo (pode ser LENTO!)
-             # try:
-             #     logger.info("Tentando pré-carregar modelo base DeepFace (ex: VGG-Face)...")
-             #     _ = DeepFace.build_model("VGG-Face")
-             #     logger.info("Modelo base DeepFace pré-carregado.")
-             # except Exception as build_e:
-             #     logger.warning(f"Não foi possível pré-carregar modelo base DeepFace: {build_e}. Modelos serão carregados sob demanda.")
-             logger.info("DeepFace parece estar disponível. Modelos serão carregados sob demanda nas análises.")
+             if not os.path.exists(KNOWN_FACES_DIR):
+                 logger.warning(f"Diretório de faces conhecidas '{KNOWN_FACES_DIR}' não encontrado. Criando...")
+                 os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
+             elif not os.path.isdir(KNOWN_FACES_DIR):
+                 logger.error(f"O caminho para faces conhecidas '{KNOWN_FACES_DIR}' existe mas não é um diretório!")
+                 DeepFace = None # Desativa DeepFace se o caminho for inválido
+             else:
+                 logger.info(f"Diretório para banco de dados de faces DeepFace: '{KNOWN_FACES_DIR}'.")
+                 # Teste rápido opcional para forçar carregamento inicial de algum modelo (pode ser LENTO!)
+                 # try:
+                 #     logger.info("Tentando pré-carregar modelo base DeepFace (ex: VGG-Face)...")
+                 #     _ = DeepFace.build_model("VGG-Face") # VGG-Face é o default
+                 #     logger.info("Modelo base DeepFace pré-carregado.")
+                 # except Exception as build_e:
+                 #     logger.warning(f"Não foi possível pré-carregar modelo base DeepFace: {build_e}. Modelos serão carregados sob demanda.")
+                 logger.info("DeepFace parece estar disponível. Modelos serão carregados sob demanda nas análises.")
          except Exception as e:
              logger.error(f"Erro durante a verificação inicial do DeepFace (ex: criação do diretório '{KNOWN_FACES_DIR}'): {e}", exc_info=True)
-             # DeepFace pode não funcionar corretamente se houve erro aqui. A task tentará usá-lo mesmo assim.
+             DeepFace = None # Desativa em caso de erro
     else:
-        logger.warning("DeepFace desativado (biblioteca 'deepface' não importada ou KNOWN_FACES_DIR não definido).")
+        logger.warning("DeepFace desativado (biblioteca 'deepface' não importada ou KNOWN_FACES_DIR não definido/inválido).")
 
 
     # --- Google Cloud Vision ---
@@ -415,7 +332,9 @@ def load_models(device: str):
         try:
             logger.info(f"Carregando credenciais do Google Cloud Vision de: {VISION_API_CREDENTIALS}...")
             if not os.path.exists(VISION_API_CREDENTIALS):
-                raise FileNotFoundError(f"Arquivo de credenciais não encontrado em: {VISION_API_CREDENTIALS}")
+                raise FileNotFoundError(f"Arquivo de credenciais Google Cloud Vision não encontrado em: {VISION_API_CREDENTIALS}")
+            if not os.path.isfile(VISION_API_CREDENTIALS):
+                 raise ValueError(f"O caminho das credenciais '{VISION_API_CREDENTIALS}' não é um arquivo.")
 
             # Usa as credenciais do arquivo JSON especificado
             cloud_vision_client = vision.ImageAnnotatorClient.from_service_account_json(
@@ -423,13 +342,16 @@ def load_models(device: str):
             )
             # Teste simples para verificar a conexão/autenticação (opcional, consome quota mínima)
             # logger.info("Testando autenticação do Google Cloud Vision...")
-            # test_image = vision.Image(content=base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")) # 1x1 pixel gif
+            # test_image = vision.Image(content=base64.b64decode(b"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")) # 1x1 pixel gif
             # response = cloud_vision_client.annotate_image({'image': test_image, 'features': [{'type_': vision.Feature.Type.LABEL_DETECTION}]})
             # if response.error.message: raise Exception(f"Erro na API Vision (teste): {response.error.message}")
             logger.info("Cliente Google Cloud Vision inicializado e autenticado com sucesso.")
         except FileNotFoundError as fnf_e:
             logger.error(str(fnf_e)) # Já tem a mensagem formatada
             cloud_vision_client = None
+        except ValueError as val_e:
+             logger.error(str(val_e))
+             cloud_vision_client = None
         except ImportError: # Se google.cloud.vision foi definido como None antes
              logger.error("Erro ao usar Google Cloud Vision: Biblioteca não foi importada corretamente.")
              cloud_vision_client = None
@@ -448,7 +370,7 @@ def load_models(device: str):
 def preprocess_frame_for_midas_transformers(frame: np.ndarray, processor, device) -> torch.Tensor | None:
     """Converte frame OpenCV BGR para o formato esperado pelo MiDaS DPT via Transformers."""
     if processor is None or frame is None:
-        logger.debug("Pré-processamento MiDaS pulado (processador ou frame nulo).")
+        # logger.debug("Pré-processamento MiDaS pulado (processador ou frame nulo).")
         return None
     try:
         # Transformers DPTImageProcessor geralmente espera RGB PIL Image ou numpy array
@@ -465,7 +387,7 @@ def preprocess_frame_for_midas_transformers(frame: np.ndarray, processor, device
 def get_depth_from_midas_output_transformers(output, original_frame_shape: tuple) -> np.ndarray | None:
     """Processa a saída do MiDaS (Transformers DPT) para obter um mapa de profundidade."""
     if output is None or not hasattr(output, 'predicted_depth'):
-        logger.debug("Pós-processamento MiDaS pulado (output nulo ou sem 'predicted_depth').")
+        # logger.debug("Pós-processamento MiDaS pulado (output nulo ou sem 'predicted_depth').")
         return None
     try:
         # Processamento dentro de torch.no_grad() para economizar memória/tempo
@@ -473,25 +395,25 @@ def get_depth_from_midas_output_transformers(output, original_frame_shape: tuple
             # A saída do DPTForDepthEstimation está em `output.predicted_depth`
             # Precisa ser redimensionada para o tamanho da imagem original
             # A saída é geralmente [1, H_out, W_out], então usamos unsqueeze(1) se for [H_out, W_out]
+            # Para DPT, a saída já costuma ser [1, H, W] ou [B, H, W]
             depth_tensor = output.predicted_depth
-            if depth_tensor.ndim == 2:
-                 depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0) # Adiciona Batch e Channel se necessário
-            elif depth_tensor.ndim == 3:
-                 depth_tensor = depth_tensor.unsqueeze(1) # Adiciona Channel
+            # logger.debug(f"MiDaS output tensor shape: {depth_tensor.shape}") # Shape: torch.Size([1, 384, 384]) por ex.
 
             # Redimensiona para o tamanho original (altura, largura)
             original_height, original_width = original_frame_shape[:2]
             prediction = torch.nn.functional.interpolate(
-                depth_tensor,
+                depth_tensor.unsqueeze(1), # Adiciona dimensão de canal (esperado por interpolate) -> [B, 1, H, W]
                 size=(original_height, original_width),
                 mode="bicubic", # Bicubic costuma dar resultados mais suaves
                 align_corners=False, # Importante para certos modos de interpolação
             )
+            # logger.debug(f"MiDaS interpolated tensor shape: {prediction.shape}") # Shape: torch.Size([1, 1, H_orig, W_orig])
 
             # Remove dimensões extras (Batch e Channel) e move para CPU como numpy array
             depth_map_DPT = prediction.squeeze().cpu().numpy()
+            # logger.debug(f"MiDaS final depth map shape: {depth_map_DPT.shape}") # Shape: (H_orig, W_orig)
 
-        # logger.debug(f"Mapa de profundidade MiDaS gerado com shape: {depth_map_ DPT.shape}")
+        # logger.debug(f"Mapa de profundidade MiDaS gerado com shape: {depth_map_DPT.shape}")
         # Valores DPT: Maiores indicam MAIS longe.
         return depth_map_DPT
     except Exception as e:
@@ -508,47 +430,49 @@ def get_midas_distance_at_point_or_bbox(depth_map: np.ndarray | None, box: list 
     if depth_map is None:
         # logger.debug("Cálculo de distância MiDaS pulado (depth_map nulo).")
         return None
+    if depth_map.ndim != 2:
+        logger.warning(f"Mapa de profundidade MiDaS inesperado (shape {depth_map.shape}), esperado 2D.")
+        return None
 
-    h, w = depth_map.shape[:2] # Aceita mapas 2D ou 3D (pega só H e W)
+    h, w = depth_map.shape
 
     try:
         target_x, target_y = -1, -1
 
         if point:
-            x, y = map(int, point)
+            # Garante que ponto seja (x, y) e inteiros
+            x, y = map(int, point[:2])
             if 0 <= y < h and 0 <= x < w:
                 target_x, target_y = x, y
             else:
-                logger.warning(f"Ponto ({x},{y}) fora dos limites do mapa de profundidade ({w}x{h}).")
+                # logger.warning(f"Ponto ({x},{y}) fora dos limites do mapa de profundidade ({w}x{h}).")
                 return None # Ponto fora da imagem
 
-        elif box is not None and len(box) == 4:
-            # Converte box para int e garante limites
-            x1, y1, x2, y2 = map(int, box)
+        elif box is not None and len(box) >= 4:
+            # Converte box para int e garante limites (assume formato [x1, y1, x2, y2, ...])
+            x1, y1, x2, y2 = map(int, box[:4])
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w - 1, x2), min(h - 1, y2) # Usa w-1 e h-1 como índices máximos
 
             # Verifica se a bbox é válida após o clipping
             if x1 >= x2 or y1 >= y2:
-                logger.warning(f"Bounding box inválida após clipping: [{x1},{y1},{x2},{y2}]")
+                # logger.warning(f"Bounding box inválida após clipping: [{x1},{y1},{x2},{y2}]")
                 return None
 
             # Calcula o centro da bbox
             center_x = (x1 + x2) // 2
             center_y = (y1 + y2) // 2
             target_x, target_y = center_x, center_y
-            # logger.debug(f"Centro da bbox {box} -> ({target_x}, {target_y})")
+            # logger.debug(f"Centro da bbox {box[:4]} -> ({target_x}, {target_y})")
 
         else:
-            # Se nem ponto nem box forem fornecidos, retorna None (evita pegar centro da imagem por padrão)
+            # Se nem ponto nem box forem fornecidos, retorna None
             # logger.debug("Nenhum ponto ou bbox fornecido para buscar profundidade.")
-            # Alternativa: Poderia retornar profundidade do centro da imagem, mas é menos útil
-            # center_y, center_x = h // 2, w // 2
-            # target_x, target_y = center_x, center_y
             return None
 
         # Se temos um alvo válido, pega o valor de profundidade
         if target_x != -1 and target_y != -1:
+             # Acessa o valor no mapa numpy [linha, coluna] -> [y, x]
              midas_raw_value = float(depth_map[target_y, target_x])
              # logger.debug(f"Valor raw MiDaS em ({target_x},{target_y}): {midas_raw_value:.4f}")
              return midas_raw_value
@@ -558,7 +482,7 @@ def get_midas_distance_at_point_or_bbox(depth_map: np.ndarray | None, box: list 
 
     except IndexError:
          # Este erro pode ocorrer se target_x/target_y forem calculados incorretamente
-         logger.error(f"Índice fora dos limites ao acessar depth_map[{target_y}, {target_x}] (shape: {h}x{w}).", exc_info=False)
+         logger.error(f"Índice fora dos limites ao acessar depth_map[{target_y}, {target_x}] (shape: {h}x{w}). Box={box}, Point={point}", exc_info=False)
          return None
     except Exception as e:
          logger.error(f"Erro inesperado ao obter valor raw MiDaS: {e}", exc_info=True)
@@ -574,6 +498,8 @@ def get_midas_distance_at_point_or_bbox(depth_map: np.ndarray | None, box: list 
 # A implementação abaixo é um CHUTE / PLACEHOLDER e provavelmente estará INCORRETA.
 MIN_DIST_M = 0.2 # Distância mínima em metros a ser considerada (ex: 20cm)
 MAX_DIST_M = 25.0 # Distância máxima em metros a ser considerada (ex: 25m)
+# Flag para logar aviso de calibração apenas uma vez
+_midas_calibration_warning_logged = False
 
 def midas_depth_to_meters(midas_raw_value: float | None, depth_map: np.ndarray | None = None) -> float | None:
     """
@@ -581,6 +507,11 @@ def midas_depth_to_meters(midas_raw_value: float | None, depth_map: np.ndarray |
     !!! REQUER CALIBRAÇÃO URGENTE PARA FUNCIONAR CORRETAMENTE !!!
     Retorna distância estimada em metros ou None.
     """
+    global _midas_calibration_warning_logged
+    if not _midas_calibration_warning_logged:
+        logger.warning("--- CALIBRAÇÃO NECESSÁRIA --- A função 'midas_depth_to_meters' está usando valores placeholder. Meça distâncias reais, veja os valores 'raw' correspondentes no MiDaS e ajuste a fórmula nesta função!")
+        _midas_calibration_warning_logged = True # Loga só uma vez
+
     if midas_raw_value is None or np.isnan(midas_raw_value) or np.isinf(midas_raw_value):
         # logger.debug(f"Conversão para metros pulada (valor raw inválido: {midas_raw_value}).")
         return None
@@ -591,20 +522,23 @@ def midas_depth_to_meters(midas_raw_value: float | None, depth_map: np.ndarray |
     # para esses pontos na sua configuração e então ajustar a fórmula.
 
     # Valores RAW esperados (MAIOR = LONGE para DPT). Chutes:
+    # Estes valores dependem MUITO do modelo DPT usado (large, hybrid, swin, etc)
     RAW_VAL_AT_MIN_DIST = 2.0  # Qual valor raw o MiDaS dá para ~MIN_DIST_M (0.2m)? CHUTE!
     RAW_VAL_AT_MAX_DIST = 15.0 # Qual valor raw o MiDaS dá para ~MAX_DIST_M (25m)? CHUTE!
 
     # 1. Normalização Simples (Mapeia raw para 0-1)
     #    Evita divisão por zero se RAW_VAL_AT_MAX_DIST == RAW_VAL_AT_MIN_DIST
-    if RAW_VAL_AT_MAX_DIST <= RAW_VAL_AT_MIN_DIST:
+    range_raw = RAW_VAL_AT_MAX_DIST - RAW_VAL_AT_MIN_DIST
+    if range_raw <= 0:
         # Se os valores de calibração são inválidos ou iguais, retorna uma média? Ou None?
         # logger.warning("Valores de calibração MiDaS inválidos (max <= min).")
-        # Talvez retornar a distância mínima?
-        return MIN_DIST_M # Ou None
+        # Talvez retornar a distância mínima? Ou média? Retornar None é mais seguro.
+        return None
 
-    normalized_depth = (midas_raw_value - RAW_VAL_AT_MIN_DIST) / (RAW_VAL_AT_MAX_DIST - RAW_VAL_AT_MIN_DIST)
+    normalized_depth = (midas_raw_value - RAW_VAL_AT_MIN_DIST) / range_raw
 
     # 2. Clipping da Normalização (Garante que fique entre 0 e 1)
+    #    Isso efetivamente limita a distância estimada entre MIN e MAX metros.
     normalized_depth = np.clip(normalized_depth, 0.0, 1.0)
 
     # 3. Mapeamento Linear para Metros
@@ -612,60 +546,37 @@ def midas_depth_to_meters(midas_raw_value: float | None, depth_map: np.ndarray |
     #    normalized_depth = 1   => meters = MAX_DIST_M
     estimated_meters = MIN_DIST_M + normalized_depth * (MAX_DIST_M - MIN_DIST_M)
 
-    # 4. Retorna o valor final, clipando novamente só por segurança
-    final_meters = float(np.clip(estimated_meters, MIN_DIST_M, MAX_DIST_M))
+    # 4. Retorna o valor final (já clipado indiretamente pela normalização)
+    final_meters = float(estimated_meters)
     # logger.debug(f"Raw MiDaS {midas_raw_value:.2f} -> Norm {normalized_depth:.2f} -> Est Meters {final_meters:.2f}")
 
+    # --- Outras Estratégias Possíveis (Comentadas) ---
     # Alternativa: Relação Inversa (se MAIOR fosse PERTO, como em MiDaS v2.1)
     # scale = 500.0 # Fator de escala (CALIBRAR)
     # shift = 10.0  # Offset (CALIBRAR)
     # estimated_meters = scale / (midas_raw_value + shift)
+    # final_meters = float(np.clip(estimated_meters, MIN_DIST_M, MAX_DIST_M))
 
     # Alternativa: Relação de Potência (Flexível, mas precisa calibrar K e EXP)
     # k_scale = 0.5   # CALIBRAR
     # exp_factor = 1.1 # CALIBRAR (positivo se raw maior = longe)
     # estimated_meters = k_scale * (midas_raw_value ** exp_factor)
-
-
-    # LOG IMPORTANTE: Avisa que a calibração é necessária se ainda não foi feita
-    # Poderia ter uma flag global `IS_CALIBRATED = False`
-    # if not IS_CALIBRATED:
-    #     logger.warning("Função midas_depth_to_meters está usando valores PLACEHOLDER! CALIBRAÇÃO é necessária.")
+    # final_meters = float(np.clip(estimated_meters, MIN_DIST_M, MAX_DIST_M))
 
     return final_meters
 
 
 # --- Classe Principal AudioLoop ---
 
-# --- Classe Principal AudioLoop ---
-
 class AudioLoop:
-    # ADICIONADO: gemini_client, genai_module, glm_module aos parâmetros
-    def __init__(self, video_mode=DEFAULT_VIDEO_MODE, user_name=DEFAULT_USER_NAME, device='cpu', gemini_client=None, genai_module=None, glm_module=None):
+    def __init__(self, video_mode=DEFAULT_VIDEO_MODE, user_name=DEFAULT_USER_NAME, device='cpu'):
         """Inicializa o sistema do assistente."""
         self.video_mode = video_mode
         self.user_name = user_name
-        self.device = device
-        # ADICIONADO: Armazena as referências passadas como atributos da instância
-        self.gemini_client = gemini_client
-        self.genai = genai_module
-        self.glm = glm_module
-        # --- FIM DAS LINHAS ADICIONADAS/MODIFICADAS ---
-
-        logger.info(f"Inicializando AudioLoop: Modo Vídeo='{self.video_mode}', User='{self.user_name}', Device='{self.device}'")
-        # Log de verificação
-        if self.gemini_client:
-            logger.info(f"AudioLoop recebeu instância do cliente Gemini.")
-        else:
-            logger.warning("AudioLoop NÃO recebeu instância do cliente Gemini.")
+        self.device = device # Dispositivo para modelos de IA ('cpu' ou 'cuda')
+        logger.info(f"Inicializando AudioLoop: Modo Vídeo='{video_mode}', User='{user_name}', Device='{device}'")
 
         # --- Async Queues ---
-        # (O restante do __init__ continua igual)
-
-        # --- Async Queues ---
-        # Essas filas são a espinha dorsal da comunicação entre as tasks assíncronas
-
-        # Filas para Comunicação com Gemini (bidirecional)
         self.gemini_audio_in_queue = asyncio.Queue(maxsize=50)   # Áudio Recebido do Gemini -> Para tocar
         self.gemini_text_in_queue = asyncio.Queue()      # Texto Recebido do Gemini -> Para logar/exibir
         self.mic_audio_out_queue = asyncio.Queue(maxsize=20) # Áudio Capturado do Mic -> Para enviar ao Gemini
@@ -673,11 +584,10 @@ class AudioLoop:
         self.context_injection_queue = asyncio.Queue(maxsize=10) # String de Contexto Formatada -> Para enviar ao Gemini
         self.text_command_out_queue = asyncio.Queue(maxsize=5) # Comandos de Texto do Usuário -> Para enviar ao Gemini
 
-
         # Filas para distribuição de frames para Processadores de IA (frames BGR crus)
         self.processor_frame_queues = {
             "yolo": asyncio.Queue(maxsize=3),
-            "sam2": asyncio.Queue(maxsize=3),
+            "sam": asyncio.Queue(maxsize=3), # Renomeado de sam2 para sam
             "midas": asyncio.Queue(maxsize=3),
             "deepface": asyncio.Queue(maxsize=3),
             "cloud_vision": asyncio.Queue(maxsize=3) # OCR pode ser menos frequente
@@ -687,14 +597,14 @@ class AudioLoop:
         # Filas para coletar Resultados dos Processadores de IA
         self.results_queues = {
             "yolo": asyncio.Queue(),
-            "sam2": asyncio.Queue(),
+            "sam": asyncio.Queue(), # Renomeado de sam2 para sam
             "midas": asyncio.Queue(),
             "deepface": asyncio.Queue(),
             "cloud_vision": asyncio.Queue()
         }
 
         # --- Estado da Aplicação ---
-        self.chat_session = None # Armazena a sessão de chat ativa com Gemini (se start_chat for usado)
+        self.chat_session = None # Armazena a sessão de chat ativa com Gemini
         self.audio_input_stream = None # Stream PyAudio para captura de microfone
         self.audio_output_stream = None # Stream PyAudio para playback de áudio Gemini
         self.last_context_update_time = time.monotonic() # Controle de frequência de envio de contexto
@@ -711,7 +621,7 @@ class AudioLoop:
     def _register_active_processors(self):
         """Verifica quais modelos foram carregados e marca as tasks como ativas."""
         if yolo_model: self._active_processors["yolo"] = True
-        if sam_predictor: self._active_processors["sam2"] = True
+        if sam_predictor: self._active_processors["sam"] = True # Renomeado de sam2 para sam
         if midas_model: self._active_processors["midas"] = True
         if DeepFace: self._active_processors["deepface"] = True # Assume ativo se lib existe e dir está ok
         if cloud_vision_client: self._active_processors["cloud_vision"] = True
@@ -719,7 +629,7 @@ class AudioLoop:
         logger.info(f"Processadores de IA ativos: {active_list if active_list else 'Nenhum'}")
 
     async def _encode_frame_for_gemini(self, frame: np.ndarray) -> dict | None:
-        """Converte frame numpy BGR para formato blob (bytes JPEG) para Gemini API v1.5+."""
+        """Converte frame numpy BGR para formato blob (bytes JPEG) para Gemini API."""
         if frame is None:
             return None
         try:
@@ -731,19 +641,20 @@ class AudioLoop:
                 logger.warning("Falha ao codificar frame para JPEG.")
                 return None
 
-            # API mais nova espera Blob: { mime_type, data: bytes }
+            # API espera Blob: { mime_type, data: bytes }
             mime_type = "image/jpeg"
             image_bytes = encoded_jpeg.tobytes()
 
-            # Verifica tamanho (Gemini pode ter limites)
+            # Verifica tamanho (Gemini tem limites, ex: 20MB total por request, mas cada parte menor)
+            # 4MB por parte é um limite seguro comum.
             # logger.debug(f"Frame JPEG encoded: {len(image_bytes) / 1024:.1f} KB")
-            if len(image_bytes) > 4 * 1024 * 1024: # Exemplo de limite (4MB) - VERIFICAR DOCS!
-                 logger.warning(f"Frame JPEG ({len(image_bytes) / 1024:.1f} KB) excede limite, descartando.")
+            if len(image_bytes) > 4 * 1024 * 1024: # Limite de 4MB por parte
+                 logger.warning(f"Frame JPEG ({len(image_bytes) / 1024 / 1024:.1f} MB) excede limite de 4MB, descartando.")
                  # Poderia tentar reduzir qualidade ou tamanho aqui
                  return None
 
-            # Retorna no formato esperado pela API (verificar documentação se mudou)
-            # O 'data' é diretamente os bytes da imagem.
+            # Retorna no formato esperado pela API (glm.Part(inline_data=glm.Blob(...)))
+            # Esta função só prepara o dicionário, a conversão para Blob ocorre no sender.
             return {"mime_type": mime_type, "data": image_bytes}
 
         except cv2.error as cv_err:
@@ -758,16 +669,30 @@ class AudioLoop:
         try:
             if drop_oldest_if_full and queue.full():
                 try:
+                    # Descarta o item mais antigo para dar espaço ao novo
                     old_item = queue.get_nowait()
-                    queue.task_done() # Marca o antigo como "feito" para não bloquear join()s
-                    logger.warning(f"Fila '{queue_name}' estava cheia. Item mais antigo descartado.")
+                    # Não precisa de task_done() aqui, pois get_nowait não cria uma task pendente
+                    # logger.warning(f"Fila '{queue_name}' estava cheia ({queue.qsize()}/{queue.maxsize}). Item mais antigo descartado.")
+                    # Incrementa contador de drop específico da fila, se existir
+                    if queue_name.endswith(" Frame Input"):
+                        proc_name = queue_name.split(" ")[0].lower()
+                        if proc_name in self.frame_drop_counters:
+                            self.frame_drop_counters[proc_name] += 1
+                            # Logar a cada N drops para não poluir
+                            if self.frame_drop_counters[proc_name] % 50 == 0:
+                                logger.warning(f"Fila '{queue_name}' descartou {self.frame_drop_counters[proc_name]} frames até agora.")
+
                 except asyncio.QueueEmpty:
                     pass # Fila esvaziou entre a checagem e o get, ignora
+                except Exception as e_get:
+                    logger.error(f"Erro ao tentar descartar item antigo da fila '{queue_name}': {e_get}")
+
+            # Tenta colocar o novo item (pode falhar se a fila encheu entre o check e o put)
             await queue.put(item)
             return True
         except asyncio.QueueFull:
-            # Só ocorre se drop_oldest_if_full=False e a fila encher
-            logger.error(f"Fila '{queue_name}' cheia e não foi possível descartar item. Item atual perdido.")
+            # Só ocorre se drop_oldest_if_full=False ou se a fila encheu muito rápido
+            logger.error(f"Fila '{queue_name}' cheia ({queue.qsize()}/{queue.maxsize}) e não foi possível adicionar item. Item atual perdido.")
             return False
         except Exception as e:
             logger.error(f"Erro inesperado ao colocar item na fila '{queue_name}': {e}")
@@ -801,11 +726,11 @@ class AudioLoop:
                     await asyncio.sleep(5) # Espera antes de tentar de novo
                     continue
 
-                # Executa a inferência YOLO. `to_thread` pode ser usado se for pesado em CPU
-                # mas YOLO com GPU costuma liberar o event loop rapidamente. Testar.
-                # results = await asyncio.to_thread(yolo_model, frame_bgr, device=self.device, verbose=False)
+                # Executa a inferência YOLO.
                 yolo_start_time = time.monotonic()
-                results = yolo_model(frame_bgr, device=self.device, verbose=False, conf=0.3) # Conf thresh na chamada
+                # Usar to_thread se a inferência for muito bloqueante na CPU
+                # results = await asyncio.to_thread(yolo_model, frame_bgr, device=self.device, verbose=False, conf=0.3)
+                results = yolo_model(frame_bgr, device=self.device, verbose=False, conf=0.35) # Conf thresh na chamada
                 yolo_elapsed = time.monotonic() - yolo_start_time
                 # logger.debug(f"YOLO inference took {yolo_elapsed:.3f}s")
 
@@ -824,7 +749,7 @@ class AudioLoop:
                             detections.append({
                                 "label": names[int(clss[i])],
                                 "confidence": float(confs[i]),
-                                "box": boxes[i].tolist() # Converte para lista python
+                                "box": boxes[i].tolist() # Converte para lista python [x1, y1, x2, y2]
                             })
 
                 if detections:
@@ -838,9 +763,8 @@ class AudioLoop:
 
                 # Sinaliza que o item foi processado na fila de entrada
                 queue.task_done()
-
-                # Pequeno sleep para ceder controle, mesmo que a task seja rápida
-                # await asyncio.sleep(0.01)
+                # Pequeno sleep para ceder controle, opcional
+                # await asyncio.sleep(0.005)
 
             except asyncio.CancelledError:
                 logger.info("YOLO Processor Task cancelada.")
@@ -849,19 +773,24 @@ class AudioLoop:
                 logger.error(f"Erro crítico no YOLO Processor: {e}", exc_info=True)
                 # Tentar consumir o item da fila para não bloquear em caso de erro persistente
                 if not queue.empty():
-                     try: queue.get_nowait(); queue.task_done()
+                     try:
+                         queue.get_nowait()
+                         queue.task_done()
                      except asyncio.QueueEmpty: pass
+                     except Exception as e_get: logger.error(f"Erro ao limpar fila YOLO após erro: {e_get}")
                 await asyncio.sleep(2) # Espera antes de tentar próximo frame
         logger.info("YOLO Processor Task finalizada.")
 
-    async def process_sam2(self):
-        """Task para processar frames com SAM2 (Segment Anything). **USA SIMULAÇÃO!**"""
-        if not self._active_processors["sam2"]:
-            logger.warning("Task SAM2 não iniciada (predictor não carregado/ativo).")
+    async def process_sam(self): # Renomeado de process_sam2
+        """Task para processar frames com SAM (Segment Anything). **USA SIMULAÇÃO!**"""
+        if not self._active_processors["sam"]:
+            logger.warning("Task SAM não iniciada (predictor não carregado/ativo).")
             return
-        logger.info("SAM2 Processor Task iniciada (usando placeholder/simulação).")
-        queue = self.processor_frame_queues["sam2"]
-        results_queue = self.results_queues["sam2"]
+        # ### AJUSTE NECESSÁRIO ### - Implementar lógica real de SAM aqui se desejar
+        logger.warning("--- AVISO --- SAM Processor Task iniciada, MAS USANDO SIMULAÇÃO.")
+        logger.warning("              Para usar segmentação real, edite a função 'process_sam'.")
+        queue = self.processor_frame_queues["sam"]
+        results_queue = self.results_queues["sam"]
 
         while not self.shutdown_event.is_set():
             try:
@@ -870,7 +799,7 @@ class AudioLoop:
                 frame_bgr = frame_data['frame']
 
                 if sam_predictor is None: # Checa novamente
-                     logger.warning("SAM2 predictor tornou-se None, pulando frame.")
+                     logger.warning("SAM predictor tornou-se None, pulando frame.")
                      queue.task_done()
                      await asyncio.sleep(5)
                      continue
@@ -879,11 +808,29 @@ class AudioLoop:
                 # SAM geralmente requer frame RGB
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-                # --- Lógica de Inferência SAM2 ---
+                # --- Lógica de Inferência SAM ---
                 # A implementação REAL dependeria do que se quer:
-                # 1. Segmentar TUDO: Usaria `SamAutomaticMaskGenerator(sam_predictor.model).generate(frame_rgb)` (Pode ser LENTO!)
-                # 2. Segmentar com Prompts: `sam_predictor.set_image(frame_rgb)` e depois `sam_predictor.predict(point_coords=..., point_labels=..., box=..., multimask_output=...)`
-                #    Os prompts (pontos, caixas) poderiam vir do YOLO ou de outra fonte.
+                # 1. Segmentar TUDO (Automatic Mask Generation):
+                #    - Pode ser MUITO LENTO, especialmente em CPU.
+                #    - Exemplo (requer `SamAutomaticMaskGenerator` importado):
+                #      from segment_anything import SamAutomaticMaskGenerator
+                #      mask_generator = SamAutomaticMaskGenerator(sam_predictor.model)
+                #      masks_data = await asyncio.to_thread(mask_generator.generate, frame_rgb)
+                # 2. Segmentar com Prompts (Pontos, Caixas):
+                #    - Mais rápido, mas precisa de prompts (ex: do YOLO).
+                #    - Exemplo:
+                #      await asyncio.to_thread(sam_predictor.set_image, frame_rgb)
+                #      # Obter prompts (ex: ponto central de uma bbox YOLO)
+                #      input_point = np.array([[center_x, center_y]])
+                #      input_label = np.array([1]) # 1 para foreground point
+                #      masks, scores, logits = await asyncio.to_thread(
+                #          sam_predictor.predict,
+                #          point_coords=input_point,
+                #          point_labels=input_label,
+                #          multimask_output=False # Pega só a melhor máscara
+                #      )
+                #      # Processar 'masks' e 'scores'
+                #      masks_data = [{"mask": masks[0], "score": scores[0]}] # Exemplo simplificado
 
                 # --- PLACEHOLDER ATUAL: Simular resultado de segmentação ---
                 # Função simulada que retorna uma estrutura parecida com a real
@@ -908,14 +855,14 @@ class AudioLoop:
                              "bbox": [x1, y1, x2, y2], # Bbox da máscara
                              # "point_coords": [[x1+(x2-x1)//2, y1+(y2-y1)//2]], # Ponto central
                          })
-                    # logger.debug(f"SAM2 (simulado) gerou {len(masks_data)} máscaras.")
+                    # logger.debug(f"SAM (simulado) gerou {len(masks_data)} máscaras.")
                     time.sleep(0.05 + np.random.rand() * 0.1) # Simula tempo de processamento
                     return masks_data
 
                 # Roda a simulação em thread separada para não bloquear (mesmo sendo simulação)
                 masks_info = await asyncio.to_thread(segment_simulation)
                 sam_elapsed = time.monotonic() - sam_start_time
-                # logger.debug(f"SAM2 (sim) inference took {sam_elapsed:.3f}s")
+                # logger.debug(f"SAM (sim) processing took {sam_elapsed:.3f}s")
 
                 if masks_info:
                      # Formatar resultado para a fila (sumário simplificado)
@@ -928,10 +875,11 @@ class AudioLoop:
                          # Simplifica a info - talvez só área? Ou só IOU? Ou uma label genérica?
                          # A IA final vai receber este resumo. Como tornar útil?
                          # Ex: "ObjGrande(iou=0.95)"
+                         total_area = frame_rgb.shape[0] * frame_rgb.shape[1]
                          size_label = "Desconhecido"
-                         if area > (frame_rgb.shape[0]*frame_rgb.shape[1]*0.3): size_label="Enorme"
-                         elif area > (frame_rgb.shape[0]*frame_rgb.shape[1]*0.1): size_label="Grande"
-                         elif area > (frame_rgb.shape[0]*frame_rgb.shape[1]*0.02): size_label="Medio"
+                         if area > (total_area * 0.3): size_label="Enorme"
+                         elif area > (total_area * 0.1): size_label="Grande"
+                         elif area > (total_area * 0.02): size_label="Medio"
                          else: size_label="Pequeno"
 
                          # Usar 'Seg' (Segmento) ou 'Obj' (Objeto)? 'Seg' é mais neutro.
@@ -943,22 +891,25 @@ class AudioLoop:
                              "segmentation_summary": ", ".join(processed_segments), # Envia sumário textual
                              "raw_masks_count": len(masks_info) # Envia contagem total
                              # "masks_data": masks_info # Poderia enviar dados completos (mas seria GRANDE)
-                         }, "SAM2 Results")
+                         }, "SAM Results")
 
                 queue.task_done()
                 # SAM (real) pode ser pesado, dar uma pausa? Ou deixar o scheduler decidir?
                 # await asyncio.sleep(0.05) # Pequena pausa opcional
 
             except asyncio.CancelledError:
-                logger.info("SAM2 Processor Task cancelada.")
+                logger.info("SAM Processor Task cancelada.")
                 break
             except Exception as e:
-                logger.error(f"Erro crítico no SAM2 Processor: {e}", exc_info=True)
+                logger.error(f"Erro crítico no SAM Processor: {e}", exc_info=True)
                 if not queue.empty():
-                    try: queue.get_nowait(); queue.task_done()
+                    try:
+                        queue.get_nowait()
+                        queue.task_done()
                     except asyncio.QueueEmpty: pass
+                    except Exception as e_get: logger.error(f"Erro ao limpar fila SAM após erro: {e_get}")
                 await asyncio.sleep(2)
-        logger.info("SAM2 Processor Task finalizada.")
+        logger.info("SAM Processor Task finalizada.")
 
     async def process_midas(self):
         """Task para processar frames com MiDaS (DPT) e gerar mapa de profundidade."""
@@ -1008,7 +959,7 @@ class AudioLoop:
                 # else: logger.warning("Falha ao gerar mapa de profundidade MiDaS para este frame.")
 
                 queue.task_done()
-                # await asyncio.sleep(0.02) # Pausa opcional
+                # await asyncio.sleep(0.01) # Pausa opcional
 
             except asyncio.CancelledError:
                 logger.info("MiDaS Processor Task cancelada.")
@@ -1016,8 +967,11 @@ class AudioLoop:
             except Exception as e:
                 logger.error(f"Erro crítico no MiDaS Processor: {e}", exc_info=True)
                 if not queue.empty():
-                    try: queue.get_nowait(); queue.task_done()
+                    try:
+                        queue.get_nowait()
+                        queue.task_done()
                     except asyncio.QueueEmpty: pass
+                    except Exception as e_get: logger.error(f"Erro ao limpar fila MiDaS após erro: {e_get}")
                 await asyncio.sleep(2)
         logger.info("MiDaS Processor Task finalizada.")
 
@@ -1025,7 +979,7 @@ class AudioLoop:
     async def process_deepface(self):
         """Task para detectar e reconhecer faces com DeepFace."""
         if not self._active_processors["deepface"]:
-             logger.warning("Task DeepFace não iniciada (biblioteca não carregada ou dir não definido).")
+             logger.warning("Task DeepFace não iniciada (biblioteca não carregada ou dir não definido/inválido).")
              return
         logger.info("DeepFace Processor Task iniciada.")
         queue = self.processor_frame_queues["deepface"]
@@ -1035,8 +989,13 @@ class AudioLoop:
         model_name = "VGG-Face" # Outros: "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
         distance_metric = "cosine" # Ou "euclidean", "euclidean_l2"
         # Backend de detecção: 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe', 'yolov8', 'yunet', 'centerface'
-        detector_backend = 'retinaface' # 'retinaface' costuma ser bom, 'mediapipe' é leve, 'yolov8' se YOLO já estiver carregado?
-        similarity_threshold = 0.60 # Limiar para considerar um match (1.0 - distance > threshold). Ajustar experimentalmente!
+        # 'retinaface' costuma ser bom, 'mediapipe' é leve, 'mtcnn' bom equilíbrio. 'yolov8' se YOLO já estiver carregado?
+        detector_backend = 'mtcnn' # Trocado para mtcnn como um bom padrão
+        # Limiar de similaridade: 1.0 - distance > threshold.
+        # O valor ótimo depende do modelo e métrica. Cosine: ~0.6-0.7, Euclidean L2: ~1.0-1.2
+        # Para VGG-Face + Cosine, 0.68 é um valor comum de referência, mas AJUSTE!
+        similarity_threshold = 0.68 # Limiar para considerar um match. AJUSTAR EXPERIMENTALMENTE!
+        logger.info(f"DeepFace configurado: Model={model_name}, Metric={distance_metric}, Backend={detector_backend}, SimThreshold={similarity_threshold}")
 
         while not self.shutdown_event.is_set():
             try:
@@ -1052,7 +1011,7 @@ class AudioLoop:
                         # DeepFace `find` pode usar BGR ou RGB dependendo do backend.
                         # Passar BGR costuma ser seguro, a lib deve converter se necessário.
                         # db_path usa KNOWN_FACES_DIR global.
-                        # enforce_detection=False: retorna mesmo se não achar *nenhum* rosto
+                        # enforce_detection=False: retorna lista vazia se não achar *nenhum* rosto
                         # align=True: alinha os rostos antes de extrair features (recomendado)
                         # silent=True: suprime logs internos do DeepFace
                         dfs_results = DeepFace.find(img_path=frame_bgr.copy(), # Passa cópia para segurança
@@ -1062,28 +1021,47 @@ class AudioLoop:
                                              detector_backend=detector_backend,
                                              enforce_detection=False, # NÃO falha se não achar rosto
                                              align=True,
-                                             silent=True)
+                                             silent=True) # Suprime logs internos
 
                         recognized_list = []
-                        # dfs_results é uma LISTA de DataFrames. Cada DF corresponde a um rosto detectado na img_path.
-                        # Cada linha no DF é um match potencial da DB.
+                        # dfs_results é uma LISTA de DataFrames (pandas). Cada DF corresponde a um rosto detectado na img_path.
+                        # Cada linha no DF é um match potencial da DB para aquele rosto detectado.
                         if dfs_results and isinstance(dfs_results, list):
                             for df in dfs_results:
+                                # O DataFrame pode ter colunas como: 'identity', 'source_x', 'source_y', 'source_w', 'source_h', 'distance'
+                                # A coluna 'distance' é a chave para o reconhecimento.
                                 if not df.empty:
                                     # Ordena matches para este rosto pela distância (menor é melhor)
-                                    df = df.sort_values(by="distance", ascending=True)
+                                    df = df.sort_values(by=f"{model_name}_{distance_metric}", ascending=True) # Nome da coluna de distância
 
                                     # Pega o MELHOR match (primeira linha após ordenar)
                                     best_match = df.iloc[0]
                                     identity_path = best_match['identity']
-                                    distance = best_match['distance']
+                                    distance = best_match[f"{model_name}_{distance_metric}"]
+
+                                    # Calcula similaridade (depende da métrica, aqui para cosseno)
+                                    # Para cosseno, similaridade = (1 - distancia), mas clampado em 0.
+                                    # Para euclidiana, pode ser diferente. Assumindo cosseno.
                                     similarity = max(0.0, 1.0 - distance) # Similaridade (0 a 1)
 
                                     # Extrai a BBox do rosto detectado (source_x/y/w/h)
-                                    source_x = best_match.get('source_x', 0)
-                                    source_y = best_match.get('source_y', 0)
-                                    source_w = best_match.get('source_w', 1) # Evita w/h=0
-                                    source_h = best_match.get('source_h', 1)
+                                    # Os nomes das colunas de BBox podem variar ligeiramente entre versões/backends
+                                    # Tentar buscar colunas comuns
+                                    if 'source_x' in df.columns:
+                                        source_x = best_match.get('source_x', 0)
+                                        source_y = best_match.get('source_y', 0)
+                                        source_w = best_match.get('source_w', 1) # Evita w/h=0
+                                        source_h = best_match.get('source_h', 1)
+                                    elif 'region' in df.columns: # Outro formato possível {'x':.., 'y':.., 'w':.., 'h':..}
+                                        region = best_match.get('region', {})
+                                        source_x = region.get('x', 0)
+                                        source_y = region.get('y', 0)
+                                        source_w = region.get('w', 1)
+                                        source_h = region.get('h', 1)
+                                    else: # Fallback se não encontrar bbox
+                                        source_x, source_y, source_w, source_h = 0, 0, 1, 1
+
+
                                     box_xyxy = [source_x, source_y, source_x + source_w, source_y + source_h]
 
                                     face_info = {"box_xyxy": box_xyxy, "similarity": float(similarity)}
@@ -1096,32 +1074,37 @@ class AudioLoop:
                                             # Pega o nome do diretório pai do arquivo de identidade
                                             name = os.path.basename(os.path.dirname(identity_path))
                                             # Evita nomes genéricos que o DeepFace possa usar internamente
-                                            if "representations_" in name or not name:
+                                            if "representations_" in name or not name or name == os.path.basename(KNOWN_FACES_DIR):
                                                 name = "Desconhecido"
                                         except Exception:
                                             name = "Desconhecido"
                                         face_info["name"] = name
-                                        # logger.debug(f"Face reconhecida: {name} (Sim: {similarity:.2f})")
+                                        # logger.debug(f"Face reconhecida: {name} (Sim: {similarity:.2f}, Dist: {distance:.4f})")
                                     else:
                                         # Match abaixo do limiar é considerado 'Desconhecido'
                                         face_info["name"] = "Desconhecido"
-                                        # logger.debug(f"Face detectada mas não reconhecida (Sim: {similarity:.2f} < {similarity_threshold})")
+                                        # logger.debug(f"Face detectada mas não reconhecida (Sim: {similarity:.2f} < {similarity_threshold}, Dist: {distance:.4f})")
 
                                     recognized_list.append(face_info)
-                                # else: logger.debug("DataFrame vazio encontrado em resultados DeepFace.") # Rosto detectado, mas nenhum match na DB?
+                                # else: logger.debug("DataFrame vazio encontrado em resultados DeepFace (rosto detectado, mas sem matches na DB?).")
 
                         # logger.debug(f"DeepFace thread encontrou {len(recognized_list)} rostos (reconhecidos ou não).")
                         return recognized_list
 
                     except ValueError as ve:
                         # ValueError específico que DeepFace levanta se não detectar NENHUM rosto
-                        if "Face Detector could not find any face" in str(ve):
+                        # A mensagem exata pode variar um pouco.
+                        if "Face Detector" in str(ve) and ("find any face" in str(ve) or "detect face" in str(ve)):
                              # logger.debug("DeepFace não detectou nenhum rosto no frame.")
                              return [] # Retorna lista vazia é normal neste caso
                         else:
                             # Outro ValueError inesperado
                             logger.error(f"Erro de Valor inesperado no DeepFace.find: {ve}", exc_info=False)
                             return []
+                    except FileNotFoundError as fnf:
+                        # Pode ocorrer se db_path for inválido ou não contiver imagens
+                        logger.error(f"Erro de Arquivo no DeepFace.find (db_path='{KNOWN_FACES_DIR}' existe e contém imagens?): {fnf}", exc_info=False)
+                        return []
                     except Exception as find_err:
                          # Captura qualquer outra exceção durante o DeepFace.find
                          logger.error(f"Erro crítico dentro da thread DeepFace.find: {find_err}", exc_info=True)
@@ -1140,7 +1123,7 @@ class AudioLoop:
 
                 queue.task_done()
                 # DeepFace pode ser lento, dar pausa maior?
-                # await asyncio.sleep(0.1)
+                # await asyncio.sleep(0.05)
 
             except asyncio.CancelledError:
                 logger.info("DeepFace Processor Task cancelada.")
@@ -1148,8 +1131,11 @@ class AudioLoop:
             except Exception as e:
                 logger.error(f"Erro crítico no DeepFace Processor: {e}", exc_info=True)
                 if not queue.empty():
-                     try: queue.get_nowait(); queue.task_done()
+                     try:
+                         queue.get_nowait()
+                         queue.task_done()
                      except asyncio.QueueEmpty: pass
+                     except Exception as e_get: logger.error(f"Erro ao limpar fila DeepFace após erro: {e_get}")
                 await asyncio.sleep(2)
         logger.info("DeepFace Processor Task finalizada.")
 
@@ -1163,6 +1149,8 @@ class AudioLoop:
         queue = self.processor_frame_queues["cloud_vision"]
         results_queue = self.results_queues["cloud_vision"]
         # Reimporta aqui para garantir que `vision` esteja disponível se o import inicial falhou
+        # E para ter acesso aos tipos como vision.Image
+        gcp_vision = None
         try:
             from google.cloud import vision as gcp_vision
         except ImportError:
@@ -1191,6 +1179,12 @@ class AudioLoop:
 
                 image_content = encoded_image.tobytes()
                 # Cria o objeto Image da API
+                if not gcp_vision: # Se a reimportação falhou antes
+                    logger.error("gcp_vision não está disponível para criar Image object.")
+                    queue.task_done()
+                    await asyncio.sleep(10)
+                    continue
+
                 gcp_image = gcp_vision.Image(content=image_content)
 
                 # Função para chamar a API Cloud Vision (BLOQUEANTE devido I/O de rede)
@@ -1198,12 +1192,14 @@ class AudioLoop:
                 def detect_text_thread():
                      try:
                          # logger.debug("Chamando Google Cloud Vision API (Text Detection)...")
+                         # Usa text_detection para blocos de texto ou document_text_detection para texto denso
                          response = cloud_vision_client.text_detection(image=gcp_image)
 
                          # Verifica erros na resposta da API
                          if response.error.message:
                               # Loga o erro mas não necesariamente para a task
-                              logger.error(f"Erro da API Google Cloud Vision: {response.error.message}")
+                              logger.error(f"Erro da API Google Cloud Vision: {response.error.message} (Code: {response.error.code})")
+                              # Códigos comuns: 3 (InvalidArgument), 7 (PermissionDenied), 8 (ResourceExhausted), 13 (Internal)
                               return None # Retorna None para indicar falha
 
                          # Extrai o texto completo detectado (geralmente o primeiro annotation)
@@ -1226,18 +1222,19 @@ class AudioLoop:
 
 
                 # Se a API retornou texto (não None e não vazio)
-                if detected_text_result:
+                if detected_text_result: # Checa se não é None e não é ""
                      await self._queue_put_robust(results_queue,
                                                  {"timestamp": timestamp, "ocr_text": detected_text_result},
                                                  "CloudVision Results")
 
                 # Se retornou None, indica que houve erro na API
-                #elif detected_text_result is None:
-                     # logger.warning("Chamada OCR falhou ou API retornou erro.")
+                elif detected_text_result is None:
+                     logger.warning("Chamada OCR falhou ou API retornou erro.")
+                # Se retornou "", não precisa fazer nada (nenhum texto detectado)
 
                 queue.task_done()
                 # API tem custo e limites, ESPAÇAR as chamadas é CRUCIAL
-                await asyncio.sleep(2.0) # <<< Intervalo de segurança - AJUSTAR CONFORME USO/CUSTO
+                await asyncio.sleep(2.5) # <<< Intervalo de segurança - AJUSTAR CONFORME USO/CUSTO/NECESSIDADE
 
             except asyncio.CancelledError:
                 logger.info("Cloud Vision Processor Task cancelada.")
@@ -1245,8 +1242,11 @@ class AudioLoop:
             except Exception as e:
                 logger.error(f"Erro crítico no Cloud Vision Processor: {e}", exc_info=True)
                 if not queue.empty():
-                    try: queue.get_nowait(); queue.task_done()
+                    try:
+                        queue.get_nowait()
+                        queue.task_done()
                     except asyncio.QueueEmpty: pass
+                    except Exception as e_get: logger.error(f"Erro ao limpar fila Cloud Vision após erro: {e_get}")
                 await asyncio.sleep(5) # Espera mais em caso de erro
         logger.info("Cloud Vision Processor Task finalizada.")
 
@@ -1264,20 +1264,24 @@ class AudioLoop:
         last_valid_results = {k: None for k in self.results_queues}
         # Guarda o último mapa de profundidade válido para cálculos de distância
         latest_depth_map = None
+        latest_depth_map_timestamp = 0
 
         # Função helper para consumir TUDO de uma fila e retornar APENAS o último item
         async def get_latest_item_from_queue(q_name: str) -> dict | None:
             queue = self.results_queues[q_name]
             last_item = None
+            items_processed = 0
             try:
                 # Esvazia a fila pegando todos os itens disponíveis sem bloquear
                 while True:
                     item = queue.get_nowait()
                     last_item = item # Guarda o último item lido
                     queue.task_done() # Marca como processado
+                    items_processed += 1
             except asyncio.QueueEmpty:
                 # Fila vazia, retorna o último item que conseguiu pegar (ou None se estava vazia)
-                # if last_item: logger.debug(f"Got latest result from {q_name}")
+                # if items_processed > 1: logger.debug(f"Consumed {items_processed} items from '{q_name}', using last.")
+                # elif last_item: logger.debug(f"Got latest result from {q_name}")
                 return last_item
             except Exception as e_get:
                 logger.error(f"Erro ao esvaziar fila '{q_name}': {e_get}")
@@ -1289,31 +1293,44 @@ class AudioLoop:
 
                 # 1. Atualizar últimos resultados válidos e o mapa de profundidade
                 data_changed_since_last_synthesis = False
+                current_depth_map = None # Mapa a ser usado nesta iteração
+                current_depth_map_time = 0
+
                 for name in self.results_queues.keys():
                     # Pega o item MAIS RECENTE da fila de resultados (descarta antigos)
                     latest_item = await get_latest_item_from_queue(name)
                     if latest_item:
-                        last_valid_results[name] = latest_item
-                        data_changed_since_last_synthesis = True # Marca que algo novo chegou
+                        # Compara timestamp para ver se é mais novo que o último usado
+                        if last_valid_results[name] is None or latest_item.get("timestamp", 0) > last_valid_results[name].get("timestamp", 0):
+                            last_valid_results[name] = latest_item
+                            data_changed_since_last_synthesis = True # Marca que algo novo chegou
+                            # logger.debug(f"Updated last valid result for '{name}'")
+
                         # Se for resultado do MiDaS, atualiza o mapa de profundidade mais recente
                         if name == "midas" and "depth_map" in latest_item:
-                            latest_depth_map = latest_item["depth_map"]
-                            # logger.debug("Mapa de profundidade MiDaS atualizado para síntese.")
+                            ts = latest_item.get("timestamp", 0)
+                            if ts > latest_depth_map_timestamp:
+                                latest_depth_map = latest_item["depth_map"]
+                                latest_depth_map_timestamp = ts
+                                # logger.debug(f"Global latest depth map updated (Timestamp: {ts:.2f})")
 
-                # Verifica se é hora de injetar contexto OU se dados importantes mudaram
-                # (Poderia ter lógica mais complexa aqui, ex: enviar só se perigo detectado)
+                # Usa o mapa de profundidade mais recente disponível globalmente
+                current_depth_map = latest_depth_map
+                current_depth_map_time = latest_depth_map_timestamp
+
+                # Verifica se é hora de injetar contexto
                 current_time = time.monotonic()
                 should_send_context = (current_time - self.last_context_update_time >= CONTEXT_INJECTION_INTERVAL)
 
-                # Só monta e envia o contexto se for a hora OU se dados relevantes mudaram?
-                # Por simplicidade, vamos enviar na frequência definida se houver *algo* nos dados recentes.
+                # Só monta e envia o contexto se for a hora E houver dados recentes (ou se dados mudaram?)
+                # Enviar na frequência definida se houver *algo* nos dados recentes é mais simples.
                 if should_send_context and any(last_valid_results.values()):
                     context_parts = [] # Lista para guardar as strings de cada tipo de dado
                     # logger.debug("Montando string de contexto...")
 
                     # --- Processa Objetos YOLO + Distância MiDaS ---
                     yolo_res = last_valid_results["yolo"]
-                    # logger.debug(f"YOLO data for context: {'Yes' if yolo_res else 'No'}, Depth map available: {'Yes' if latest_depth_map is not None else 'No'}")
+                    # logger.debug(f"YOLO data for context: {'Yes' if yolo_res else 'No'}, Depth map available: {'Yes' if current_depth_map is not None else 'No'}")
                     if yolo_res and "detections" in yolo_res:
                          objects_str_parts = []
                          # Ordena por confiança (descendente) e pega os N primeiros
@@ -1321,18 +1338,20 @@ class AudioLoop:
                          for det in sorted_detections[:7]: # Limita a 7 objetos mais confiantes
                              label = det['label']
                              conf = det['confidence']
-                             box = det['box']
+                             box = det['box'] # [x1, y1, x2, y2]
                              dist_str = "(dist?)" # Placeholder se não conseguir calcular distância
 
-                             # Tenta calcular a distância usando o mapa de profundidade mais recente
-                             if latest_depth_map is not None:
-                                 midas_raw = get_midas_distance_at_point_or_bbox(latest_depth_map, box=box)
-                                 dist_meters = midas_depth_to_meters(midas_raw, latest_depth_map) # Tenta converter para metros
+                             # Tenta calcular a distância usando o mapa de profundidade atual
+                             if current_depth_map is not None:
+                                 # Passa a BBox para a função
+                                 midas_raw = get_midas_distance_at_point_or_bbox(current_depth_map, box=box)
+                                 dist_meters = midas_depth_to_meters(midas_raw, current_depth_map) # Tenta converter para metros
                                  if dist_meters is not None:
                                       # Formato para IA: 'objeto (X.Ym)'
                                       dist_str = f"({dist_meters:.1f}m)"
-                                      # logger.debug(f"  -> YOLO: {label} at {dist_str}")
+                                      # logger.debug(f"  -> YOLO: {label} at {dist_str} (Raw: {midas_raw:.2f})")
                                  # else: logger.debug(f"  -> YOLO: {label} - Failed distance (raw: {midas_raw})")
+                             # else: logger.debug(f"  -> YOLO: {label} - No depth map for distance.")
 
 
                              # Monta a string para este objeto: "label(dist)" ou "label(dist?)"
@@ -1351,23 +1370,25 @@ class AudioLoop:
                          people_str_parts = []
                          # Ordenar rostos pelo tamanho da BBox (maior primeiro) para dar prioridade aos mais próximos/maiores?
                          def bbox_area(f):
-                             box = f.get('box_xyxy')
+                             box = f.get('box_xyxy') # [x1, y1, x2, y2]
                              return (box[2]-box[0]) * (box[3]-box[1]) if box and len(box)==4 and box[2]>box[0] and box[3]>box[1] else 0
 
                          sorted_faces = sorted(face_res["faces"], key=bbox_area, reverse=True)
 
                          for face in sorted_faces[:5]: # Limita a 5 rostos (os maiores na imagem)
                              name = face.get('name', 'Desconhecido')
-                             box = face.get('box_xyxy')
+                             box = face.get('box_xyxy') # [x1, y1, x2, y2]
                              dist_str = "(dist?)"
 
-                             if latest_depth_map is not None and box:
-                                 midas_raw = get_midas_distance_at_point_or_bbox(latest_depth_map, box=box)
-                                 dist_meters = midas_depth_to_meters(midas_raw, latest_depth_map)
+                             if current_depth_map is not None and box:
+                                 midas_raw = get_midas_distance_at_point_or_bbox(current_depth_map, box=box)
+                                 dist_meters = midas_depth_to_meters(midas_raw, current_depth_map)
                                  if dist_meters is not None:
                                      dist_str = f"({dist_meters:.1f}m)"
-                                     # logger.debug(f"  -> Face: {name} at {dist_str}")
+                                     # logger.debug(f"  -> Face: {name} at {dist_str} (Raw: {midas_raw:.2f})")
                                  # else: logger.debug(f"  -> Face: {name} - Failed distance (raw: {midas_raw})")
+                             # else: logger.debug(f"  -> Face: {name} - No depth map for distance.")
+
 
                              people_str_parts.append(f"{name}{dist_str}")
 
@@ -1382,11 +1403,11 @@ class AudioLoop:
                     # logger.debug(f"Cloud Vision data for context: {'Yes' if cv_res else 'No'}")
                     if cv_res and "ocr_text" in cv_res and cv_res["ocr_text"]:
                          # Limpa e formata o texto OCR
-                         ocr_text = cv_res["ocr_text"].replace('\n', ' ').strip()
+                         ocr_text = cv_res["ocr_text"].replace('\n', ' ').replace('\r', '').strip()
                          ocr_text = ' '.join(ocr_text.split()) # Remove espaços múltiplos
                          if ocr_text:
                              # Envia texto truncado se for muito longo
-                             max_ocr_len = 200
+                             max_ocr_len = 250 # Aumentado um pouco
                              truncated_text = ocr_text[:max_ocr_len] + ('...' if len(ocr_text) > max_ocr_len else '')
                              context_parts.append(f"Texto: '{truncated_text}'")
                              # logger.debug(f"  -> OCR: '{truncated_text}'")
@@ -1394,22 +1415,22 @@ class AudioLoop:
                     # else: logger.debug("Dados OCR não disponíveis ou vazios.")
 
 
-                    # --- Processa Sumário SAM2 (Segmentação Simulada) ---
-                    sam_res = last_valid_results["sam2"]
-                    # logger.debug(f"SAM2 data for context: {'Yes' if sam_res else 'No'}")
+                    # --- Processa Sumário SAM (Segmentação Simulada) ---
+                    sam_res = last_valid_results["sam"] # Nome da chave corrigido
+                    # logger.debug(f"SAM data for context: {'Yes' if sam_res else 'No'}")
                     if sam_res and "segmentation_summary" in sam_res:
                         summary = sam_res["segmentation_summary"]
                         count = sam_res.get("raw_masks_count", "?")
                         # Formato: "Segmentos: [Seg1[Grande,IoU:0.95], Seg2[Medio,IoU:0.88]] (Total: 5)"
                         context_parts.append(f"Segmentos: [{summary}] (Total: {count})")
-                        # logger.debug(f"  -> SAM2 Summary: [{summary}] (Total: {count})")
-                    # else: logger.debug("Dados SAM2 não disponíveis.")
+                        # logger.debug(f"  -> SAM Summary: [{summary}] (Total: {count})")
+                    # else: logger.debug("Dados SAM não disponíveis.")
 
 
                     # --- Monta string final e envia para Gemini ---
                     if context_parts: # Só envia se alguma informação foi adicionada
                         context_str = "[CONTEXTO_SISTEMA] " + ". ".join(context_parts) + "."
-                        logger.info(f"Injetando contexto: {context_str}") # Log importante
+                        logger.info(f"Injetando contexto (len={len(context_str)}): {context_str[:200]}...") # Log truncado
                         # Envia para a fila de saída de contexto
                         await self._queue_put_robust(self.context_injection_queue, context_str, "Context Injection")
                         self.last_context_update_time = current_time # Atualiza o tempo do último envio
@@ -1420,11 +1441,9 @@ class AudioLoop:
                     # if not any(last_valid_results.values()): logger.debug("Nenhum dado válido recente para contexto.")
 
                 # Espera um intervalo antes da próxima tentativa de síntese
-                # O tempo de espera deve ser menor que CONTEXT_INJECTION_INTERVAL
-                # para permitir checagens mais frequentes dos dados, mas não tão baixo
-                # a ponto de causar busy-waiting.
                 synth_elapsed = time.monotonic() - synth_start_time
-                wait_time = max(0.1, 0.75 - synth_elapsed) # Espera ~0.75s no total por ciclo
+                # Espera ~1 segundo no total por ciclo, ajustado pelo tempo de processamento
+                wait_time = max(0.1, 1.0 - synth_elapsed)
                 await asyncio.sleep(wait_time)
 
             except asyncio.CancelledError:
@@ -1450,22 +1469,33 @@ class AudioLoop:
         cap = None # VideoCapture object
         sct = None # Screen Capture object
         monitor = None # Monitor selecionado para screen capture
+        is_capturing = False
 
         # --- Configuração Inicial da Fonte de Vídeo ---
         if self.video_mode == "camera":
             try:
-                camera_index = 0 # Tentar câmera 0 primeiro
-                logger.info(f"Tentando abrir câmera index {camera_index}...")
-                # Usar asyncio.to_thread para chamadas bloqueantes do OpenCV
-                cap = await asyncio.to_thread(cv2.VideoCapture, camera_index)
-                if not cap or not cap.isOpened():
-                    logger.warning(f"Falha ao abrir câmera {camera_index}. Tentando index 1...")
-                    camera_index = 1
-                    if cap: await asyncio.to_thread(cap.release) # Libera anterior se falhou parcialmente
-                    cap = await asyncio.to_thread(cv2.VideoCapture, camera_index)
+                # Tentar abrir câmera - pode precisar de privilégios ou ajustes (ex: v4l2-ctl)
+                # Tentar índices comuns 0, 1, 2...
+                for camera_index in range(3):
+                    logger.info(f"Tentando abrir câmera index {camera_index}...")
+                    # Usar asyncio.to_thread para chamadas bloqueantes do OpenCV
+                    cap_test = await asyncio.to_thread(cv2.VideoCapture, camera_index)
+                    # Verificar se abriu e se consegue ler um frame
+                    if cap_test and cap_test.isOpened():
+                        ret_test, _ = await asyncio.to_thread(cap_test.read)
+                        if ret_test:
+                            logger.info(f"Câmera index {camera_index} aberta com sucesso.")
+                            cap = cap_test
+                            break # Sai do loop se encontrou uma câmera funcional
+                        else:
+                            logger.warning(f"Câmera index {camera_index} abriu, mas falhou ao ler frame. Tentando próximo.")
+                            await asyncio.to_thread(cap_test.release)
+                    else:
+                        logger.warning(f"Falha ao abrir câmera index {camera_index}.")
+                        if cap_test: await asyncio.to_thread(cap_test.release)
 
-                if not cap or not cap.isOpened():
-                    logger.error("Erro fatal ao abrir câmera! Tentou index 0 e 1. Verifique conexões/drivers.")
+                if not cap:
+                    logger.error("Erro fatal: Nenhuma câmera funcional encontrada! Verifique conexões/drivers/permissões.")
                     self.shutdown_event.set() # Sinaliza para encerrar outras tasks
                     return # Encerra a task de captura
 
@@ -1477,16 +1507,17 @@ class AudioLoop:
                 # Logar configurações reais da câmera
                 actual_width = int(await asyncio.to_thread(cap.get, cv2.CAP_PROP_FRAME_WIDTH))
                 actual_height = int(await asyncio.to_thread(cap.get, cv2.CAP_PROP_FRAME_HEIGHT))
-                actual_fps = await asyncio.to_thread(cap.get, cv2.CAP_PROP_FPS)
-                logger.info(f"Câmera {camera_index} aberta com sucesso: {actual_width}x{actual_height} @ {actual_fps:.1f} FPS (nominal)")
+                actual_fps = await asyncio.to_thread(cap.get, cv2.CAP_PROP_FPS) # Pode retornar 0 se não suportado
+                logger.info(f"Usando Câmera: {actual_width}x{actual_height} @ {actual_fps:.1f} FPS (nominal)")
+                is_capturing = True
 
             except cv2.error as cv_err:
-                 logger.error(f"Erro OpenCV ao abrir câmera: {cv_err}. Encerrando task de captura.", exc_info=True)
+                 logger.error(f"Erro OpenCV ao configurar câmera: {cv_err}. Encerrando task de captura.", exc_info=True)
                  self.shutdown_event.set()
                  if cap: await asyncio.to_thread(cap.release)
                  return
             except Exception as e:
-                 logger.error(f"Erro inesperado ao abrir câmera: {e}. Encerrando task de captura.", exc_info=True)
+                 logger.error(f"Erro inesperado ao configurar câmera: {e}. Encerrando task de captura.", exc_info=True)
                  self.shutdown_event.set()
                  if cap: await asyncio.to_thread(cap.release)
                  return
@@ -1501,6 +1532,7 @@ class AudioLoop:
                  if len(sct.monitors) > monitor_index:
                       monitor = sct.monitors[monitor_index]
                       logger.info(f"Captura de tela configurada para monitor {monitor_index}: {monitor['width']}x{monitor['height']} at ({monitor['left']},{monitor['top']})")
+                      is_capturing = True
                  else:
                      logger.error(f"Monitor {monitor_index} não encontrado! Monitores disponíveis: {sct.monitors}")
                      sct = None # Desativa captura
@@ -1512,13 +1544,19 @@ class AudioLoop:
                  self.shutdown_event.set()
                  return
         else:
-             logger.info("Modo de vídeo 'none'. Task de captura de vídeo não fará nada útil, encerrando.")
+             logger.info("Modo de vídeo 'none'. Task de captura de vídeo não será iniciada.")
              return # Encerra a task se modo for 'none'
+
+        if not is_capturing:
+            logger.error("Falha ao inicializar fonte de vídeo. Encerrando task de captura.")
+            self.shutdown_event.set()
+            return
 
         # --- Loop Principal de Captura e Distribuição ---
         frame_capture_counter = 0
         frame_processed_counter = 0
         capture_start_time = time.monotonic()
+        last_log_time = capture_start_time
 
         while not self.shutdown_event.is_set():
             try:
@@ -1527,11 +1565,12 @@ class AudioLoop:
 
                 # 1. Capturar Frame (Câmera ou Tela) - Usar to_thread para operações bloqueantes
                 if cap:
-                    ret, frame = await asyncio.to_thread(cap.read) # cap.read() é bloqueante
+                    # cap.read() é bloqueante
+                    ret, frame = await asyncio.to_thread(cap.read)
                     if ret:
                         frame_bgr = frame
                     else:
-                        logger.warning("Câmera retornou 'ret=False'. Fim do vídeo ou erro.")
+                        logger.warning("Câmera retornou 'ret=False'. Fim do vídeo ou erro de leitura.")
                         await asyncio.sleep(0.5) # Espera antes de tentar ler de novo
                         continue # Pula para próxima iteração
                 elif sct and monitor:
@@ -1546,52 +1585,64 @@ class AudioLoop:
                     frame_capture_counter += 1
                     timestamp = time.time() # Timestamp da captura
 
-                    # Log FPS de captura a cada N frames
-                    if frame_capture_counter % 100 == 0:
-                         elapsed_total = time.monotonic() - capture_start_time
-                         avg_fps = frame_capture_counter / elapsed_total if elapsed_total > 0 else 0
-                         logger.info(f"Captura: {frame_capture_counter} frames @ {avg_fps:.1f} FPS (Proc: {frame_processed_counter}) Grab time: {grab_time_elapsed*1000:.1f}ms")
+                    # Log FPS de captura e drops a cada ~5 segundos
+                    current_time_log = time.monotonic()
+                    if current_time_log - last_log_time >= 5.0:
+                         elapsed_total = current_time_log - capture_start_time
+                         avg_fps_cap = frame_capture_counter / elapsed_total if elapsed_total > 0 else 0
+                         avg_fps_proc = frame_processed_counter / elapsed_total if elapsed_total > 0 else 0
+                         drop_counts = {k: v for k, v in self.frame_drop_counters.items() if v > 0}
+                         logger.info(f"Status Captura (5s): Cap FPS={avg_fps_cap:.1f}, Proc FPS={avg_fps_proc:.1f}, GrabT={grab_time_elapsed*1000:.1f}ms. Drops: {drop_counts}")
+                         last_log_time = current_time_log
 
 
                     # 2. Enviar frame codificado para Gemini (sem throttling aqui, Gemini pode querer mais frames)
                     #    A codificação acontece em _encode_frame_for_gemini
-                    gemini_frame_blob = self._encode_frame_for_gemini(frame_bgr.copy()) # Envia cópia
-                    if gemini_frame_blob:
+                    gemini_frame_blob_dict = await self._encode_frame_for_gemini(frame_bgr.copy()) # Envia cópia
+                    if gemini_frame_blob_dict:
                         await self._queue_put_robust(self.video_frame_out_queue,
-                                                     gemini_frame_blob,
+                                                     gemini_frame_blob_dict,
                                                      "Gemini Video",
                                                      drop_oldest_if_full=True)
 
 
                     # 3. Distribuir frame cru (BGR) para processadores de IA (COM THROTTLING)
-                    current_time = time.monotonic()
-                    if current_time - self.last_processed_frame_time >= (1.0 / VIDEO_FPS_TARGET):
-                        self.last_processed_frame_time = current_time
-                        frame_processed_counter += 1
-                        # Cria o payload UMA VEZ
-                        frame_payload = {"timestamp": timestamp, "frame": frame_bgr.copy()} # Nova cópia
+                    current_time_proc = time.monotonic()
+                    time_since_last_proc = current_time_proc - self.last_processed_frame_time
+                    target_interval = 1.0 / VIDEO_FPS_TARGET if VIDEO_FPS_TARGET > 0 else float('inf')
 
-                        # Envia para as filas de TODOS os processadores ATIVOS
+                    if time_since_last_proc >= target_interval:
+                        self.last_processed_frame_time = current_time_proc
+                        frame_processed_counter += 1
+                        # Cria o payload UMA VEZ (com cópia do frame)
+                        frame_payload = {"timestamp": timestamp, "frame": frame_bgr.copy()}
+
+                        # Envia para as filas dos processadores ATIVOS
                         put_tasks = []
                         for name, is_active in self._active_processors.items():
                             if is_active:
                                 queue = self.processor_frame_queues[name]
+                                # Não usar await aqui dentro, cria as tasks e depois gather
                                 put_tasks.append(
                                     self._queue_put_robust(queue, frame_payload, f"{name.upper()} Frame Input", drop_oldest_if_full=True)
                                 )
 
                         if put_tasks:
-                            await asyncio.gather(*put_tasks) # Envia em paralelo (embora put seja rápido)
+                            # Espera todas as tentativas de put terminarem (geralmente rápido)
+                            await asyncio.gather(*put_tasks, return_exceptions=False) # Não parar se um falhar
                         # logger.debug(f"Frame distribuído para {len(put_tasks)} processadores ativos.")
-                    # else: logger.debug("Throttling: Pulando distribuição para processadores IA.")
+                    # else:
+                        # logger.debug(f"Throttling IA: {time_since_last_proc:.3f}s < {target_interval:.3f}s")
+                        pass
 
 
                     # Pequeno sleep para evitar 100% CPU se a captura for muito rápida
                     # O tempo de grab já age como um sleep natural, mas adiciona um mínimo.
                     process_time_elapsed = time.monotonic() - grab_time_start
                     # Tenta manter um ciclo total próximo ao target FPS de processamento, mas não menor que 1ms
-                    desired_cycle_time = 1.0 / (VIDEO_FPS_TARGET * 1.5) # Um pouco mais rápido que o target
-                    sleep_duration = max(0.001, desired_cycle_time - process_time_elapsed)
+                    # Ajustar o sleep pode ser complexo, um valor pequeno fixo pode ser mais simples
+                    # sleep_duration = max(0.001, target_interval - process_time_elapsed) # Tenta sincronizar com proc FPS
+                    sleep_duration = 0.001 # Sleep mínimo para ceder controle
                     await asyncio.sleep(sleep_duration)
 
                 else:
@@ -1604,17 +1655,28 @@ class AudioLoop:
                 break
             except Exception as e:
                 logger.error(f"Erro crítico na task Capture Video: {e}", exc_info=True)
+                # Tentar liberar recursos em caso de erro grave?
+                if cap and not cap.isOpened(): logger.warning("Câmera parece ter desconectado.")
                 await asyncio.sleep(1) # Espera antes de tentar de novo
 
         # --- Limpeza Final ---
         logger.info("Encerrando captura de vídeo...")
         if cap:
             logger.info("Liberando recurso da câmera...")
-            await asyncio.to_thread(cap.release)
-            logger.info("Câmera liberada.")
+            try:
+                await asyncio.to_thread(cap.release)
+                logger.info("Câmera liberada.")
+            except Exception as e_rel:
+                logger.error(f"Erro ao liberar câmera: {e_rel}")
         if sct:
             # MSS não tem um método close explícito, o objeto pode ser apenas deletado pelo GC
             logger.info("Recurso de captura de tela MSS será liberado.")
+            try:
+                sct.close() # Algumas versões podem ter close()
+            except AttributeError:
+                pass # Ignora se não tiver close
+            except Exception as e_sct:
+                logger.error(f"Erro ao fechar MSS: {e_sct}")
             sct = None
 
         logger.info("Capture Video Task finalizada.")
@@ -1636,9 +1698,10 @@ class AudioLoop:
             logger.info(f"Microfone Padrão: '{device_name}' (Index: {device_index}, Rate Nativa: {native_rate} Hz)")
             # Idealmente, usaríamos a taxa nativa, mas Gemini espera 16kHz.
             # PyAudio pode fazer resampling, mas verificar se a qualidade fica boa.
+            # Usar SEND_SAMPLE_RATE diretamente é mais comum.
 
             # Abre o stream de áudio
-            logger.info(f"Abrindo stream de áudio do microfone (Rate: {SEND_SAMPLE_RATE} Hz)...")
+            logger.info(f"Abrindo stream de áudio do microfone (Rate: {SEND_SAMPLE_RATE} Hz, Chunk: {CHUNK_SIZE})...")
             stream = await asyncio.to_thread(
                 pya.open,
                 format=FORMAT, # paInt16
@@ -1652,23 +1715,37 @@ class AudioLoop:
             logger.info(f"Stream de áudio do microfone aberta com sucesso.")
 
             # Loop de leitura
-            while not self.shutdown_event.is_set() and stream.is_active():
+            while not self.shutdown_event.is_set():
+                 # Verifica se o stream ainda está ativo antes de ler
+                 is_active = await asyncio.to_thread(stream.is_active)
+                 if not is_active:
+                     logger.warning("Stream de áudio do microfone tornou-se inativo. Encerrando task.")
+                     break
+
                  try:
                      # Lê dados do stream (bloqueante, por isso to_thread)
+                     # exception_on_overflow=False evita que a leitura trave se o buffer interno do PortAudio estourar
                      audio_chunk = await asyncio.to_thread(stream.read, CHUNK_SIZE, exception_on_overflow=False)
 
                      # Coloca o chunk de áudio na fila de saída para Gemini
                      # API v1.5+ espera bytes diretamente no 'data' do blob de áudio.
+                     # O mime type é importante.
+                     mime_type = f"audio/l16;rate={SEND_SAMPLE_RATE}" # PCM Linear 16-bit
                      await self._queue_put_robust(self.mic_audio_out_queue,
-                                                 {"mime_type": f"audio/l16;rate={SEND_SAMPLE_RATE}", "data": audio_chunk},
+                                                 {"mime_type": mime_type, "data": audio_chunk},
                                                  "Mic Audio Out",
                                                  drop_oldest_if_full=True)
                      # logger.debug(f"Chunk de áudio do Mic ({len(audio_chunk)} bytes) enfileirado.")
 
                  except IOError as e:
+                      # Erros de IO podem ser transientes ou indicar problema no dispositivo
                       logger.error(f"Erro de I/O no stream de áudio do Microfone: {e}. Tentando continuar.", exc_info=False)
+                      # Verificar se o stream ainda está ativo após o erro
+                      is_active_after_error = await asyncio.to_thread(stream.is_active)
+                      if not is_active_after_error:
+                          logger.error("Stream do microfone inativo após erro de IO. Encerrando task.")
+                          break
                       await asyncio.sleep(0.5) # Espera um pouco após erro de IO
-                      # Tentar recriar stream aqui poderia ser uma opção avançada
                  except asyncio.CancelledError:
                      # Captura cancelamento dentro do loop de leitura também
                      logger.info("Cancelamento recebido durante leitura do Mic.")
@@ -1678,7 +1755,8 @@ class AudioLoop:
         except asyncio.CancelledError:
              logger.info("Listen Audio Task cancelada (durante inicialização ou loop externo).")
         except OSError as e_os:
-             logger.error(f"Erro de Sistema ao configurar microfone (dispositivo indisponível?): {e_os}. Listen Audio Task encerrada.", exc_info=False)
+             # Erros comuns: Device unavailable, Invalid sample rate/format
+             logger.error(f"Erro de Sistema ao configurar microfone (dispositivo indisponível? taxa/formato inválido?): {e_os}. Listen Audio Task encerrada.", exc_info=False)
              self.shutdown_event.set() # Sinaliza erro para outras tasks
         except Exception as e:
              logger.error(f"Erro crítico na Listen Audio Task: {e}. Encerrando.", exc_info=True)
@@ -1686,15 +1764,25 @@ class AudioLoop:
         finally:
              # --- Limpeza do Stream ---
              logger.info("Limpando recursos da Listen Audio Task...")
-             if stream and stream.is_active():
-                  logger.info("Fechando stream de áudio do microfone...")
+             if stream:
+                  is_active_finally = False
                   try:
-                      # Operações de stream são bloqueantes
-                      await asyncio.to_thread(stream.stop_stream)
-                      await asyncio.to_thread(stream.close)
-                      logger.info("Stream de áudio do microfone fechada.")
-                  except Exception as e_close:
-                       logger.error(f"Erro ao fechar stream de áudio do Mic: {e_close}")
+                      # Verifica uma última vez antes de tentar fechar
+                      is_active_finally = await asyncio.to_thread(stream.is_active)
+                  except Exception as e_isactive:
+                      logger.warning(f"Erro ao verificar se stream Mic estava ativo no finally: {e_isactive}")
+
+                  if is_active_finally:
+                       logger.info("Fechando stream de áudio do microfone...")
+                       try:
+                           # Operações de stream são bloqueantes
+                           await asyncio.to_thread(stream.stop_stream)
+                           await asyncio.to_thread(stream.close)
+                           logger.info("Stream de áudio do microfone fechada.")
+                       except Exception as e_close:
+                            logger.error(f"Erro ao fechar stream de áudio do Mic: {e_close}")
+                  else:
+                      logger.info("Stream de áudio do microfone já estava inativo ou fechado.")
              self.audio_input_stream = None
              logger.info("Listen Audio Task finalizada.")
 
@@ -1711,7 +1799,7 @@ class AudioLoop:
         try:
              # Abre stream de saída
              # Usamos RECEIVE_SAMPLE_RATE, pois é a taxa que Gemini (supostamente) envia
-             logger.info(f"Abrindo stream de áudio de saída (Playback Rate: {RECEIVE_SAMPLE_RATE} Hz)...")
+             logger.info(f"Abrindo stream de áudio de saída (Playback Rate: {RECEIVE_SAMPLE_RATE} Hz, Chunk: {CHUNK_SIZE})...")
              stream = await asyncio.to_thread(
                  pya.open,
                  format=FORMAT, # paInt16
@@ -1728,39 +1816,53 @@ class AudioLoop:
              while not self.shutdown_event.is_set():
                  try:
                      # Espera por um chunk de áudio na fila de entrada do Gemini
-                     audio_chunk = await queue.get()
+                     # Usar timeout para verificar shutdown_event periodicamente
+                     audio_chunk = await asyncio.wait_for(queue.get(), timeout=0.5)
 
-                     if audio_chunk:
+                     if audio_chunk and isinstance(audio_chunk, bytes):
                          # Escreve o chunk no stream de áudio (bloqueante)
                          # logger.debug(f"Tocando chunk de áudio ({len(audio_chunk)} bytes)...")
                          await asyncio.to_thread(stream.write, audio_chunk)
-                     else:
-                         # logger.debug("Recebido chunk de áudio None, ignorando.")
-                         pass
+                     elif audio_chunk:
+                         logger.warning(f"Recebido item não-bytes na fila de áudio: {type(audio_chunk)}")
 
                      # Sinaliza que o item foi processado/tocado
                      queue.task_done()
 
+                 except asyncio.TimeoutError:
+                     # Timeout é normal, apenas continua verificando shutdown_event
+                     continue
                  except asyncio.CancelledError:
                       logger.info("Cancelamento recebido durante espera/playback de áudio.")
                       # Antes de sair, tentar tocar o resto da fila? Opcional.
                       logger.info("Tentando tocar áudio restante na fila antes de sair...")
                       try:
-                          while True:
+                          while True: # Esvazia a fila sem esperar
                               remaining_chunk = queue.get_nowait()
-                              if remaining_chunk: await asyncio.to_thread(stream.write, remaining_chunk)
+                              if remaining_chunk and isinstance(remaining_chunk, bytes):
+                                  await asyncio.to_thread(stream.write, remaining_chunk)
                               queue.task_done()
                       except asyncio.QueueEmpty:
                           logger.info("Fila de áudio esvaziada.")
+                      except Exception as e_flush:
+                          logger.error(f"Erro ao tocar áudio restante: {e_flush}")
                       break # Sai do loop principal
 
                  except IOError as e:
                       logger.error(f"Erro de I/O ao escrever no stream de áudio Playback: {e}. Tentando continuar.", exc_info=False)
+                      # Verificar se stream ainda está ativo
+                      is_active_after_error = await asyncio.to_thread(stream.is_active)
+                      if not is_active_after_error:
+                          logger.error("Stream de playback inativo após erro de IO. Encerrando task.")
+                          break
                       await asyncio.sleep(0.1) # Pausa curta
-                      # Considerar recriar o stream aqui em caso de erro grave?
                  except Exception as e_play:
                      logger.error(f"Erro inesperado durante playback de áudio: {e_play}", exc_info=True)
-                     queue.task_done() # Marca task done mesmo com erro para não travar
+                     # Tenta marcar task done mesmo com erro para não travar get() futuros
+                     try:
+                         queue.task_done()
+                     except ValueError: # Se task_done() for chamado mais vezes que get()
+                         pass
                      await asyncio.sleep(0.5)
 
 
@@ -1775,15 +1877,24 @@ class AudioLoop:
         finally:
             # --- Limpeza do Stream de Saída ---
              logger.info("Limpando recursos da Play Audio Task...")
-             if stream and stream.is_active():
-                  logger.info("Fechando stream de áudio de saída (playback)...")
+             if stream:
+                  is_active_finally = False
                   try:
-                      # Espera a escrita do último chunk terminar antes de fechar
-                      await asyncio.to_thread(stream.stop_stream)
-                      await asyncio.to_thread(stream.close)
-                      logger.info("Stream de áudio de saída (playback) fechada.")
-                  except Exception as e_close:
-                       logger.error(f"Erro ao fechar stream de áudio Playback: {e_close}")
+                      is_active_finally = await asyncio.to_thread(stream.is_active)
+                  except Exception as e_isactive:
+                      logger.warning(f"Erro ao verificar se stream Playback estava ativo no finally: {e_isactive}")
+
+                  if is_active_finally:
+                       logger.info("Fechando stream de áudio de saída (playback)...")
+                       try:
+                           # Espera a escrita do último chunk terminar antes de fechar (stop_stream faz isso)
+                           await asyncio.to_thread(stream.stop_stream)
+                           await asyncio.to_thread(stream.close)
+                           logger.info("Stream de áudio de saída (playback) fechada.")
+                       except Exception as e_close:
+                            logger.error(f"Erro ao fechar stream de áudio Playback: {e_close}")
+                  else:
+                      logger.info("Stream de áudio de playback já estava inativo ou fechado.")
              self.audio_output_stream = None
              logger.info("Play Audio Task finalizada.")
 
@@ -1802,6 +1913,8 @@ class AudioLoop:
                  # Usa run_in_executor para rodar input() bloqueante em outra thread
                  loop = asyncio.get_running_loop()
                  prompt = f"{self.user_name}> "
+                 # Adiciona um pequeno sleep para garantir que o prompt apareça depois de logs/respostas
+                 await asyncio.sleep(0.1)
                  text_input = await loop.run_in_executor(None, input, prompt) # 'input' é bloqueante
                  text_input = text_input.strip() # Remove espaços extras
 
@@ -1812,23 +1925,21 @@ class AudioLoop:
                  if text_input.lower() == "q":
                      logger.info("Comando 'q' recebido no terminal. Solicitando encerramento global...")
                      self.shutdown_event.set() # Sinaliza para todas as tasks encerrarem
-                     # A task de envio para Gemini precisa pegar shutdown_event também
-                     # Forçar um último put para garantir que a send task veja o shutdown? Opcional.
-                     # await queue.put(None) # Sinalizar fim? Ou deixar shutdown_event bastar?
                      break # Sai do loop da send_text_command
 
                  elif text_input.lower().startswith("regface"):
                       parts = text_input.split(maxsplit=1)
                       if len(parts) == 2 and parts[1]:
-                           person_name = parts[1].strip()
+                           person_name = parts[1].strip().replace(" ", "_") # Substitui espaços no nome para nome de pasta
                            logger.warning(f"--- REGISTRO DE ROSTO (Placeholder) ---")
                            logger.warning(f"Solicitado registro para: '{person_name}'")
                            logger.warning(f"Funcionalidade AINDA NÃO IMPLEMENTADA.")
                            logger.warning(f"Para implementar:")
-                           logger.warning(f"  1. Capturar frame de vídeo recente (ex: da fila de processamento).")
-                           logger.warning(f"  2. Usar DeepFace.extract_faces() para detectar e alinhar rosto.")
-                           logger.warning(f"  3. Salvar imagem do rosto em '{KNOWN_FACES_DIR}/{person_name}/face_01.jpg'.")
-                           logger.warning(f"  4. Opcional: Remover representação pré-calculada ({KNOWN_FACES_DIR}/representations_*.pkl) para forçar recálculo.")
+                           logger.warning(f"  1. Sinalizar para a task de captura/processamento pegar o PRÓXIMO frame com rosto.")
+                           logger.warning(f"  2. Extrair o rosto detectado (usando DeepFace.extract_faces ou similar).")
+                           logger.warning(f"  3. Criar diretório: '{os.path.join(KNOWN_FACES_DIR, person_name)}'.")
+                           logger.warning(f"  4. Salvar a imagem do rosto extraído como '{os.path.join(KNOWN_FACES_DIR, person_name, 'face_01.jpg')}' (ou nome similar).")
+                           logger.warning(f"  5. Opcional: Remover representação pré-calculada ({os.path.join(KNOWN_FACES_DIR, f'representations_{model_name}.pkl')}) para forçar recálculo na próxima chamada do DeepFace.find.")
                            print(f"Sistema: [AVISO] Registro de rosto para '{person_name}' ainda não implementado.", file=sys.stderr)
                       else:
                            print("Uso: regface <NomeDaPessoa>", file=sys.stderr)
@@ -1837,20 +1948,30 @@ class AudioLoop:
                  # --- Enviar Texto como Comando para Gemini ---
                  else:
                      # logger.debug(f"Enviando comando de texto para Gemini: '{text_input}'")
-                     # Coloca o texto na fila para a task send_to_gemini pegar
-                     await self._queue_put_robust(queue, text_input, "Text Command Out", drop_oldest_if_full=False)
+                     # Coloca o texto na fila para a task gemini_communication_manager pegar
+                     # Usar drop_oldest_if_full=False para garantir que comandos importantes não sejam perdidos
+                     # Se a fila encher, é melhor logar um erro.
+                     success = await self._queue_put_robust(queue, text_input, "Text Command Out", drop_oldest_if_full=False)
+                     if not success:
+                         logger.error("Falha ao enfileirar comando de texto - fila cheia.")
+                         print("Sistema: [ERRO] Não foi possível enviar o comando, tente novamente.", file=sys.stderr)
+
 
              except asyncio.CancelledError:
                   logger.info("Send Text Command Task cancelada.")
                   break # Sai do loop
              except RuntimeError as e:
-                 # Handle caso rode em ambiente sem terminal interativo
+                 # Handle caso rode em ambiente sem terminal interativo ou loop fechando
                  if "Cannot run input()" in str(e) or "Event loop is closed" in str(e):
                      logger.warning("Terminal não interativo ou loop fechado. Encerrando task de comando de texto.")
                      break # Sai da task se não pode ler input
                  else:
                      logger.error(f"Erro inesperado de Runtime na Send Text Command Task: {e}", exc_info=True)
                      break # Sai em caso de erro desconhecido
+             except EOFError:
+                 logger.warning("EOF recebido no input (ex: pipe fechado). Encerrando task de comando de texto.")
+                 self.shutdown_event.set() # Sinaliza shutdown se o input acabou
+                 break
              except Exception as e:
                   logger.error(f"Erro inesperado na Send Text Command Task: {e}", exc_info=True)
                   await asyncio.sleep(1) # Espera antes de tentar ler input de novo
@@ -1862,23 +1983,20 @@ class AudioLoop:
 
     async def gemini_communication_manager(self):
         """
-        Gerencia a sessão de chat multimodal com Gemini 1.5+ (`start_chat`).
-        Usa o cliente Gemini e módulos armazenados em 'self'.
+        Gerencia a sessão de chat multimodal com Gemini 1.5+.
+        Envia dados das filas de saída (áudio mic, vídeo, contexto, texto cmd)
+        e recebe respostas (áudio, texto), colocando-as nas filas de entrada apropriadas.
         """
-        # Verifica se os componentes necessários foram passados para a instância
-        if not self.gemini_client or not self.genai or not self.glm:
-             logger.error("Task Gemini Manager não iniciada - Instância do cliente Gemini (self.gemini_client) ou módulos (self.genai/self.glm) não disponíveis na classe AudioLoop.")
+        # Usa o modelo pré-inicializado globalmente
+        if not gemini_client_model or not genai or not glm:
+             logger.error("Task Gemini Manager não iniciada - Cliente/Modelo GenAI ou GLM indisponível.")
              self.shutdown_event.set()
              return
-        logger.info("Gemini Communication Manager Task iniciada (usando self.gemini_client).")
+        logger.info("Gemini Communication Manager Task iniciada.")
 
-        # Cria aliases locais para os módulos/cliente para facilitar a leitura
-        genai_local = self.genai
-        glm_local = self.glm
-        local_client_instance = self.gemini_client
-
-        chat = None # Armazena a sessão de chat ativa *desta task*
-        history = [] # Histórico para esta sessão de chat
+        chat = None # Guarda o objeto de chat multimodal
+        history = [] # Armazena histórico da conversa (opcional, pode crescer muito)
+        response_processor_task = None # Task para processar a resposta do stream
 
         # --- Loop Principal de Gerenciamento da Sessão de Chat ---
         while not self.shutdown_event.is_set():
@@ -1886,74 +2004,103 @@ class AudioLoop:
                 # 1. Iniciar ou Reiniciar a Sessão de Chat se necessário
                 if chat is None:
                      logger.info("Iniciando nova sessão de chat multimodal com Gemini...")
-                     # --- CORRIGIDO: Usa 'local_client_instance' (que veio de self.gemini_client) ---
-                     chat = local_client_instance.start_chat(history=history)
-                     # -----------------------------------------------------------------------------
-                     logger.info("Sessão de chat multimodal iniciada com sucesso.")
+                     # start_chat() usa o modelo pré-configurado (com system instruction)
+                     # Passar histórico vazio ou o último histórico válido
+                     chat = gemini_client_model.start_chat(history=history)
+                     self.chat_session = chat # Armazena sessão ativa
+                     logger.info("Sessão de chat multimodal com Gemini iniciada.")
+                     # Limpar histórico ao iniciar nova sessão? Ou manter? Manter por enquanto.
 
-                # 2. Esperar por qualquer tipo de Input para Enviar
+
+                # 2. Esperar por qualquer tipo de Input para Enviar OU Shutdown
+                #    (Mic Audio, Video Frame, Context String, Text Command)
+                #    Usa asyncio.wait para esperar pelo primeiro item disponível em qualquer fila de saída ou shutdown.
                 tasks_waiting = {}
-                tasks_waiting["mic"] = asyncio.create_task(self.mic_audio_out_queue.get())
-                tasks_waiting["video"] = asyncio.create_task(self.video_frame_out_queue.get())
-                tasks_waiting["context"] = asyncio.create_task(self.context_injection_queue.get())
-                tasks_waiting["text_cmd"] = asyncio.create_task(self.text_command_out_queue.get())
-                tasks_waiting["shutdown"] = asyncio.create_task(self.shutdown_event.wait())
+                # Cria tasks para esperar em cada fila de saída
+                tasks_waiting["mic"] = asyncio.create_task(self.mic_audio_out_queue.get(), name="WaitMic")
+                tasks_waiting["video"] = asyncio.create_task(self.video_frame_out_queue.get(), name="WaitVideo")
+                tasks_waiting["context"] = asyncio.create_task(self.context_injection_queue.get(), name="WaitContext")
+                tasks_waiting["text_cmd"] = asyncio.create_task(self.text_command_out_queue.get(), name="WaitTextCmd")
+                # Task para esperar pelo evento de shutdown
+                tasks_waiting["shutdown"] = asyncio.create_task(self.shutdown_event.wait(), name="WaitShutdown")
 
+                # Espera o PRIMEIRO item ficar pronto (ou shutdown)
+                # Sem timeout aqui, espera indefinidamente por um evento
                 done, pending = await asyncio.wait(
                     tasks_waiting.values(), return_when=asyncio.FIRST_COMPLETED
                 )
 
+                # Checar se o shutdown foi o que completou
                 if tasks_waiting["shutdown"] in done:
                     logger.info("Shutdown detectado no Gemini Manager. Encerrando...")
+                    # Cancela tasks pendentes de 'get'
                     for task in pending: task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    break
+                    await asyncio.gather(*pending, return_exceptions=True) # Espera cancelamentos
+                    # Cancela task de processamento de resposta se estiver ativa
+                    if response_processor_task and not response_processor_task.done():
+                        response_processor_task.cancel()
+                        await asyncio.gather(response_processor_task, return_exceptions=True)
+                    break # Sai do loop while
 
-                # 3. Processar Inputs que Chegaram e Montar Partes
-                content_parts = []
-                queues_to_mark_done = [] # Guarda tuplas (queue, data) para marcar done depois
+                # 3. Processar Inputs que Chegaram e Preparar para Enviar
+                send_error = None
+                content_parts = [] # Lista para agrupar partes a serem enviadas juntas
 
                 for task in done:
-                    task_name = [name for name, t in tasks_waiting.items() if t == task][0]
-                    queue = getattr(self, f"{task_name}_out_queue", None) # Ex: self.mic_audio_out_queue
+                    # Recupera o nome da task (e indiretamente da fila)
+                    task_name_prefix = task.get_name().split("Wait")[-1].lower() # Ex: 'mic', 'video', 'context', 'textcmd'
+                    # Mapeia nome da task para nome da fila (ajuste se necessário)
+                    queue_map = {"mic": "mic_audio", "video": "video_frame", "context": "context_injection", "textcmd": "text_command"}
+                    queue_attr_name = f"{queue_map.get(task_name_prefix)}_out_queue"
+
+                    queue = getattr(self, queue_attr_name, None) if queue_attr_name else None
 
                     if task.cancelled():
-                         if queue: queues_to_mark_done.append((queue, None)) # Marca done mesmo se cancelado
+                         # logger.debug(f"Task de get '{task.get_name()}' foi cancelada.")
+                         # Se foi cancelada, o item não foi consumido, não chamar task_done
                          continue
                     if task.exception():
                          ex = task.exception()
-                         logger.error(f"Erro ao obter dados da fila '{task_name}': {ex}")
-                         if queue: queues_to_mark_done.append((queue, None)) # Marca done mesmo com erro
+                         logger.error(f"Erro ao obter dados da fila via task '{task.get_name()}': {ex}")
+                         if queue:
+                             # Tenta marcar como feito na fila mesmo com erro para não bloquear
+                             try: queue.task_done()
+                             except ValueError: pass
+                         # Considerar encerrar a task principal se erro for grave? Por enquanto continua.
                          continue
 
+                    # Se chegou aqui, task completou com sucesso
                     data = task.result()
-                    if queue: queues_to_mark_done.append((queue, data)) # Adiciona à lista para marcar done
+                    if queue:
+                        try: queue.task_done() # Marca como feito na fila original
+                        except ValueError: pass # Ignora se já foi feito
 
-                    # Montar o conteúdo usando glm_local
-                    if task_name == "mic" and isinstance(data, dict) and "data" in data:
-                         # --- CORRIGIDO: Usa glm_local ---
-                         content_parts.append(glm_local.Part(inline_data=glm_local.Blob(mime_type=data.get('mime_type', 'audio/l16;rate=16000'), data=data['data'])))
-                    elif task_name == "video" and isinstance(data, dict) and "data" in data:
-                         # --- CORRIGIDO: Usa glm_local ---
-                         content_parts.append(glm_local.Part(inline_data=glm_local.Blob(mime_type=data.get('mime_type', 'image/jpeg'), data=data['data'])))
-                    elif task_name == "context" and isinstance(data, str) and data:
-                         # --- CORRIGIDO: Usa glm_local ---
-                         content_parts.append(glm_local.Part(text=data))
-                    elif task_name == "text_cmd" and isinstance(data, str) and data:
-                         # --- CORRIGIDO: Usa glm_local ---
-                         content_parts.append(glm_local.Part(text=data))
-
-                # Marca as tarefas das filas como concluídas APÓS processar os dados
-                for q, item_data in queues_to_mark_done:
+                    # Montar o conteúdo para send_message_async usando glm.Part e glm.Blob
                     try:
-                        q.task_done()
-                    except ValueError: # Se task_done() for chamado mais vezes que put()
-                        logger.warning(f"Tentativa de chamar task_done() em fila já vazia ou desbalanceada: {q}")
-                    except Exception as e_done:
-                        logger.error(f"Erro ao chamar task_done() na fila: {e_done}")
+                        if task_name_prefix == "mic" and isinstance(data, dict) and "data" in data and "mime_type" in data:
+                             # logger.debug(f"Preparando chunk de áudio Mic ({len(data['data'])} bytes) para envio.")
+                             content_parts.append(glm.Part(inline_data=glm.Blob(mime_type=data['mime_type'], data=data['data'])))
+
+                        elif task_name_prefix == "video" and isinstance(data, dict) and "data" in data and "mime_type" in data:
+                             # logger.debug(f"Preparando frame de vídeo ({len(data['data'])} bytes) para envio.")
+                             content_parts.append(glm.Part(inline_data=glm.Blob(mime_type=data['mime_type'], data=data['data'])))
+
+                        elif task_name_prefix == "context" and isinstance(data, str) and data:
+                             # logger.debug(f"Preparando string de contexto para envio.")
+                             content_parts.append(glm.Part(text=data))
+
+                        elif task_name_prefix == "textcmd" and isinstance(data, str) and data:
+                             # logger.debug(f"Preparando comando de texto para envio.")
+                             # Adiciona nome do usuário ao comando de texto
+                             user_prefix = f"{self.user_name}: "
+                             content_parts.append(glm.Part(text=user_prefix + data))
+                        # else: logger.warning(f"Dado inesperado da task {task.get_name()}: {type(data)}")
+
+                    except Exception as e_part:
+                        logger.error(f"Erro ao criar Part/Blob para {task_name_prefix}: {e_part}")
 
 
-                # Cancela tasks pendentes
+                # Cancela tasks que não completaram para pegar dados mais recentes na próxima iteração
                 for task in pending:
                     if not task.done(): task.cancel()
                 if pending: await asyncio.gather(*pending, return_exceptions=True)
@@ -1961,68 +2108,214 @@ class AudioLoop:
 
                 # 4. Enviar Mensagem Agrupada para Gemini (se houver partes)
                 if content_parts and chat:
+                    # Verifica se a task anterior de processamento de resposta terminou
+                    if response_processor_task and not response_processor_task.done():
+                        logger.warning("A task de processamento de resposta anterior ainda está ativa. Aguardando...")
+                        # Espera a task anterior terminar antes de enviar nova mensagem
+                        # Isso pode causar latência se a resposta for longa.
+                        # Alternativa: Cancelar a task anterior? Ou permitir envios concorrentes (complexo)?
+                        try:
+                            await asyncio.wait_for(response_processor_task, timeout=5.0)
+                        except asyncio.TimeoutError:
+                            logger.error("Timeout esperando task de resposta anterior. Cancelando-a.")
+                            response_processor_task.cancel()
+                            await asyncio.gather(response_processor_task, return_exceptions=True)
+                        except asyncio.CancelledError:
+                            logger.info("Task de resposta anterior foi cancelada enquanto esperava.")
+                        except Exception as e_wait:
+                            logger.error(f"Erro ao esperar task de resposta anterior: {e_wait}")
+                        response_processor_task = None # Limpa a referência
+
                     send_start_time = time.monotonic()
                     try:
-                        response_stream = await chat.send_message_async(content_parts, stream=True)
+                        # logger.info(f"Enviando {len(content_parts)} partes para Gemini...")
+                        # Stream=True para receber respostas enquanto são geradas (áudio e texto)
+                        # Usa a configuração de geração definida globalmente (opcional)
+                        response_stream = await chat.send_message_async(
+                            content_parts,
+                            stream=True,
+                            generation_config=generation_config # Passa config aqui
+                        )
                         send_elapsed = time.monotonic() - send_start_time
                         # logger.debug(f"Gemini send_message_async took {send_elapsed:.3f}s")
 
-                        # 5. Processar Resposta (Stream)
-                        async for chunk in response_stream:
-                            if self.shutdown_event.is_set(): break
+                        # 5. Lançar Task para Processar Resposta (Stream) do Gemini
+                        # Isso permite que o loop principal volte a esperar por novos inputs
+                        # enquanto a resposta está sendo processada em paralelo.
+                        logger.debug("Iniciando task para processar resposta do Gemini...")
+                        response_processor_task = asyncio.create_task(
+                            self._process_gemini_response_stream(response_stream),
+                            name="ProcessGeminiResponse"
+                        )
+                        # O loop principal continuará e poderá enviar a próxima mensagem
+                        # mesmo que esta resposta ainda esteja chegando.
 
-                            # Processar Texto
-                            if hasattr(chunk, 'text') and chunk.text:
-                                await self._queue_put_robust(self.gemini_text_in_queue, chunk.text, "Gemini Text In", drop_oldest_if_full=False)
-
-                            # Processar Áudio (se houver)
-                            if hasattr(chunk, 'parts'):
-                                for part in chunk.parts:
-                                     if hasattr(part, 'inline_data') and part.inline_data.mime_type.startswith('audio/'):
-                                         await self._queue_put_robust(self.gemini_audio_in_queue, part.inline_data.data, "Gemini Audio In", drop_oldest_if_full=True)
-                                         break # Assume um audio por chunk
-
-                            # Processar Function Calls (se houver)
-                            # if hasattr(chunk, 'function_calls')...
-
-                        # Fim do stream
-
-                    # --- CORRIGIDO: Usa genai_local.types para exceções ---
-                    except genai_local.types.BlockedPromptException as block_ex:
-                         logger.error(f"PROMPT BLOQUEADO pela API Gemini: {block_ex}")
-                         # chat = None # Opcional: Forçar reinício do chat
-                    except genai_local.types.StopCandidateException as stop_ex:
-                         logger.warning(f"Geração Gemini interrompida (Stop): {stop_ex}")
-                    # ----------------------------------------------------
-                    except Exception as e_send_recv:
-                        logger.error(f"Erro durante envio/recebimento Gemini: {e_send_recv}", exc_info=True)
-                        chat = None # Força reinício
-                        history.clear()
-                        await asyncio.sleep(5)
-                else:
-                    # Se não há partes para enviar, espera um pouco para não ocupar CPU
-                    await asyncio.sleep(0.05)
+                    # --- Tratamento de Erros Específicos do Gemini ---
+                    except genai.types.StopCandidateException as e_stop:
+                        logger.warning(f"Gemini parou a geração prematuramente: {e_stop}")
+                        # A resposta pode estar incompleta, mas continua
+                    except genai.types.BlockedPromptException as e_block:
+                        logger.error(f"Prompt bloqueado pela API Gemini: {e_block}")
+                        # Não envia nada, pode precisar ajustar safety settings ou prompt
+                        print("Sistema: [AVISO] Sua mensagem foi bloqueada por políticas de segurança.", file=sys.stderr)
+                    except genai.types.PotentialHarmException as e_harm:
+                         logger.error(f"Potencial conteúdo prejudicial detectado pela API Gemini: {e_harm}")
+                         print("Sistema: [AVISO] A resposta pode ter sido bloqueada por políticas de segurança.", file=sys.stderr)
+                    except Exception as e_send:
+                        logger.error(f"Erro durante envio para Gemini: {e_send}", exc_info=True)
+                        send_error = e_send
+                        # Se erro for grave (conexão, autenticação), limpar 'chat' para forçar reconexão
+                        # Analisar tipo de erro para decidir se reconecta
+                        logger.warning("Erro de envio. Tentando reiniciar chat na próxima iteração.")
+                        chat = None
+                        self.chat_session = None
+                        await asyncio.sleep(5) # Pausa maior antes de tentar reconectar
 
             except asyncio.CancelledError:
                 logger.info("Gemini Communication Manager Task cancelada.")
-                break
+                # Cancela tasks de 'get' pendentes ao sair
+                active_tasks = [t for t in tasks_waiting.values() if not t.done()]
+                for task in active_tasks: task.cancel()
+                if active_tasks: await asyncio.gather(*active_tasks, return_exceptions=True)
+                # Cancela task de processamento de resposta se estiver ativa
+                if response_processor_task and not response_processor_task.done():
+                    response_processor_task.cancel()
+                    await asyncio.gather(response_processor_task, return_exceptions=True)
+                break # Sai do loop while principal
             except Exception as e:
-                logger.error(f"Erro crítico inesperado no loop Gemini Communication Manager: {e}", exc_info=True)
-                chat = None # Tenta reiniciar
-                history.clear()
-                await asyncio.sleep(5)
-
-        # --- Limpeza Final ---
-        logger.info("Encerrando sessão de chat com Gemini (se ativa)...")
-        chat = None # Libera referência
-        logger.info("Gemini Communication Manager Task finalizada.")
+                logger.error(f"Erro crítico inesperado no Gemini Communication Manager: {e}", exc_info=True)
+                chat = None # Força reinicio do chat
+                self.chat_session = None
+                # Cancela task de processamento de resposta se estiver ativa
+                if response_processor_task and not response_processor_task.done():
+                    response_processor_task.cancel()
+                    await asyncio.gather(response_processor_task, return_exceptions=True)
+                await asyncio.sleep(5) # Espera antes de tentar de novo
 
         # --- Limpeza Final ---
         logger.info("Encerrando sessão de chat com Gemini (se ativa)...")
         # Não há um método 'close' explícito para o chat, apenas deixar de usar deve bastar
         self.chat_session = None
         chat = None
+        # Garante que a task de processamento de resposta seja cancelada ao sair
+        if response_processor_task and not response_processor_task.done():
+            logger.info("Cancelando task de processamento de resposta pendente no final.")
+            response_processor_task.cancel()
+            await asyncio.gather(response_processor_task, return_exceptions=True)
+
         logger.info("Gemini Communication Manager Task finalizada.")
+
+
+    async def _process_gemini_response_stream(self, response_stream):
+        """Task auxiliar para processar o stream de resposta do Gemini."""
+        full_text_response = ""
+        try:
+            # logger.debug("Processando stream de resposta Gemini...")
+            async for chunk in response_stream:
+                # Verificar se o shutdown foi ativado enquanto processa
+                if self.shutdown_event.is_set():
+                    logger.info("Shutdown detectado durante processamento de resposta Gemini.")
+                    break # Sai do loop de processamento de chunk
+
+                # -- Processar Texto --
+                # O texto pode vir em partes dentro do chunk.candidates[0].content.parts
+                try:
+                    if chunk.candidates:
+                        for part in chunk.candidates[0].content.parts:
+                            if part.text:
+                                text_part = part.text
+                                print(text_part, end='', flush=True) # Imprime texto no terminal imediatamente
+                                full_text_response += text_part
+                                # Coloca texto na fila apropriada (se houver alguma task ouvindo, ex: para log)
+                                # await self._queue_put_robust(self.gemini_text_in_queue, text_part, "Gemini Text In", drop_oldest_if_full=False)
+                except Exception as e_text:
+                    logger.warning(f"Erro ao processar parte de texto do chunk Gemini: {e_text} - Chunk: {chunk}")
+
+
+                # -- Processar Áudio --
+                # Gemini 1.5 Flash/Pro com start_chat e send_message(stream=True)
+                # NÃO retorna áudio TTS diretamente no stream de resposta do chat.
+                # O áudio precisa ser gerado separadamente usando uma API Text-to-Speech
+                # ou usando uma API específica de conversação por voz se disponível.
+                # O código original esperava 'audio_content', que não existe neste fluxo.
+                # **A funcionalidade de receber áudio do Gemini está DESATIVADA neste fluxo.**
+                # if hasattr(chunk, 'audio_content') and chunk.audio_content: # Este atributo NÃO EXISTE aqui
+                #     audio_bytes = chunk.audio_content
+                #     logger.debug(f"Recebido chunk de áudio Gemini ({len(audio_bytes)} bytes).")
+                #     await self._queue_put_robust(self.gemini_audio_in_queue, audio_bytes, "Gemini Audio In", drop_oldest_if_full=True)
+
+                # -- Processar Chamadas de Função (Tool Calls) -- (Se usar)
+                # try:
+                #     if chunk.candidates and chunk.candidates[0].content.parts:
+                #         for part in chunk.candidates[0].content.parts:
+                #             if part.function_call:
+                #                 logger.info(f"[Gemini Function Call]: {part.function_call.name}({part.function_call.args})")
+                #                 # Implementar lógica para executar a função e retornar o resultado via send_message
+                # except Exception as e_fc:
+                #      logger.warning(f"Erro ao processar function call Gemini: {e_fc}")
+
+            # Fim do stream
+            print() # Nova linha após a resposta completa no terminal
+            if full_text_response:
+                logger.info(f"[Gemini Resposta Completa]: {full_text_response}")
+                # Coloca a resposta completa na fila de texto (para log ou outro uso)
+                await self._queue_put_robust(self.gemini_text_in_queue, full_text_response, "Gemini Text In", drop_oldest_if_full=False)
+
+            # --- GERAÇÃO DE ÁUDIO TTS (PLACEHOLDER) ---
+            # Como Gemini não envia áudio aqui, precisaríamos chamar uma API TTS.
+            # Exemplo usando gTTS (simples, offline/requer conexão para gerar):
+            if full_text_response and pya: # Só tenta gerar áudio se teve texto e PyAudio está ok
+                logger.debug("Tentando gerar áudio TTS para a resposta (usando gTTS - placeholder)...")
+                try:
+                    from gtts import gTTS # pip install gTTS
+                    import tempfile
+
+                    # Cria um arquivo temporário para salvar o MP3
+                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as fp:
+                        temp_filename = fp.name
+
+                    # Gera o áudio com gTTS
+                    tts = gTTS(text=full_text_response, lang='pt-br')
+                    await asyncio.to_thread(tts.save, temp_filename)
+
+                    # Carrega o MP3 e converte para o formato do PyAudio (PCM 16-bit)
+                    # Isso requer ffmpeg/ffprobe instalado no sistema! (sudo apt install ffmpeg)
+                    # Ou usar uma biblioteca como pydub: pip install pydub
+                    from pydub import AudioSegment
+                    audio_segment = await asyncio.to_thread(AudioSegment.from_mp3, temp_filename)
+
+                    # Resample para a taxa de saída e converte para mono, 16-bit
+                    audio_segment = audio_segment.set_frame_rate(RECEIVE_SAMPLE_RATE)
+                    audio_segment = audio_segment.set_channels(CHANNELS)
+                    audio_segment = audio_segment.set_sample_width(2) # 2 bytes = 16 bits
+
+                    # Envia os bytes crus para a fila de playback
+                    audio_bytes = audio_segment.raw_data
+                    await self._queue_put_robust(self.gemini_audio_in_queue, audio_bytes, "Gemini Audio In", drop_oldest_if_full=True)
+                    logger.info(f"Áudio TTS gerado ({len(audio_bytes)} bytes) e enfileirado para playback.")
+
+                    # Limpa o arquivo temporário
+                    os.remove(temp_filename)
+
+                except ImportError as e_gtts:
+                    logger.warning(f"gTTS ou pydub não instalado ('pip install gTTS pydub'). Não foi possível gerar áudio TTS. {e_gtts}")
+                except Exception as e_tts:
+                    logger.error(f"Erro ao gerar ou processar áudio TTS: {e_tts}", exc_info=True)
+
+
+        except asyncio.CancelledError:
+            logger.info("Task de processamento de resposta Gemini cancelada.")
+            print() # Garante nova linha se cancelado durante impressão
+        except Exception as e:
+            logger.error(f"Erro crítico ao processar stream de resposta Gemini: {e}", exc_info=True)
+            print() # Garante nova linha
+        finally:
+            # logger.debug("Processamento do stream de resposta Gemini finalizado.")
+            # Atualizar histórico do chat (opcional)
+            # if full_text_response:
+            #    history.append({"role": "model", "parts": [glm.Part(text=full_text_response)]})
+            pass
+
 
     # --------------------------------------------------------------------------
     # Loop Principal de Execução e Gerenciamento de Tasks
@@ -2033,13 +2326,15 @@ class AudioLoop:
         cancelled_count = 0
         for name, task in self.tasks.items():
             if task and not task.done():
-                task.cancel()
-                # logger.debug(f"Task '{name}' cancelada.")
-                cancelled_count += 1
+                try:
+                    task.cancel()
+                    # logger.debug(f"Task '{name}' cancelada.")
+                    cancelled_count += 1
+                except Exception as e_cancel:
+                    logger.error(f"Erro ao cancelar task '{name}': {e_cancel}")
         logger.debug(f"{cancelled_count} tasks ativas foram solicitadas a cancelar.")
         # Não espera aqui, o TaskGroup ou loop principal deve esperar.
 
-    # Função _run_main_loop corrigida:
     async def _run_main_loop(self):
         """
         Ponto central que cria e gerencia o ciclo de vida das tasks principais
@@ -2053,12 +2348,15 @@ class AudioLoop:
             # Cria um TaskGroup para gerenciar as tasks de forma estruturada
             async with asyncio.TaskGroup() as tg:
                 logger.info("Criando tasks principais dentro do TaskGroup...")
+                self.tasks = {} # Limpa dict de tasks antes de recriar
 
                 # --- Comunicação Gemini & Usuário ---
                 self.tasks['gemini_manager'] = tg.create_task(self.gemini_communication_manager(), name="GeminiMgr")
-                self.tasks['play_audio'] = tg.create_task(self.play_audio(), name="PlayAudio")
-                if pya: # Só cria task de mic se PyAudio funcionou
+                if pya: # Só cria tasks de áudio se PyAudio funcionou
+                    self.tasks['play_audio'] = tg.create_task(self.play_audio(), name="PlayAudio")
                     self.tasks['listen_audio'] = tg.create_task(self.listen_audio(), name="ListenAudio")
+                else:
+                    logger.warning("Tasks de áudio (Listen/Play) não iniciadas devido a erro no PyAudio.")
                 # Task de comando de texto (pode falhar em ambientes não interativos)
                 self.tasks['send_text'] = tg.create_task(self.send_text_command(), name="SendTextCmd")
 
@@ -2066,9 +2364,9 @@ class AudioLoop:
                 # --- Captura e Processamento de Vídeo ---
                 if self.video_mode != "none":
                     self.tasks['capture_video'] = tg.create_task(self.capture_video(), name="CaptureVideo")
-                    # Cria tasks de processamento de IA somente se o vídeo estiver ativo
+                    # Cria tasks de processamento de IA somente se o vídeo estiver ativo e modelo carregado
                     if self._active_processors["yolo"]: self.tasks['yolo'] = tg.create_task(self.process_yolo(), name="ProcessYOLO")
-                    if self._active_processors["sam2"]: self.tasks['sam2'] = tg.create_task(self.process_sam2(), name="ProcessSAM2")
+                    if self._active_processors["sam"]: self.tasks['sam'] = tg.create_task(self.process_sam(), name="ProcessSAM")
                     if self._active_processors["midas"]: self.tasks['midas'] = tg.create_task(self.process_midas(), name="ProcessMiDaS")
                     if self._active_processors["deepface"]: self.tasks['deepface'] = tg.create_task(self.process_deepface(), name="ProcessDeepFace")
                     if self._active_processors["cloud_vision"]: self.tasks['cloud_vision'] = tg.create_task(self.process_cloud_vision(), name="ProcessCloudVision")
@@ -2105,7 +2403,15 @@ class AudioLoop:
                 logger.error(f"---> Erros Reais Encontrados ({len(other_errors.exceptions)}):")
                 for i, exc in enumerate(other_errors.exceptions):
                     # Loga o traceback completo para os erros reais
-                    logger.error(f"     Erro Real {i+1}: {type(exc).__name__}: {exc}", exc_info=exc)
+                    # Tenta pegar o nome da task que falhou, se disponível
+                    task_name = "Unknown Task"
+                    for name, task_obj in self.tasks.items():
+                        if hasattr(task_obj, '_coro') and hasattr(exc, '__traceback__'):
+                             # Tentar verificar se a exceção veio desta task (pode ser impreciso)
+                             # Esta parte é complexa e pode não funcionar sempre
+                             pass # Lógica de mapeamento erro->task omitida por complexidade
+
+                    logger.error(f"     Erro Real {i+1} (Task: {task_name}): {type(exc).__name__}: {exc}", exc_info=exc) # Log com traceback
                 logger.warning("Erro(s) detectado(s) no TaskGroup. Sinalizando shutdown para garantir encerramento...")
                 self.shutdown_event.set()  # Sinaliza shutdown por causa dos erros
             else:
@@ -2123,25 +2429,21 @@ class AudioLoop:
             if not self.shutdown_event.is_set():
                  logger.warning("Shutdown event não estava setado no finally do _run_main_loop, setando agora.")
                  self.shutdown_event.set()
-            # Código opcional para esperar tasks (mantido comentado)
-            # logger.debug("Aguardando finalização de todas as tasks...")
-            # await asyncio.gather(...)
-            # logger.debug("Tasks finalizadas.")
+            # Tenta cancelar tasks explicitamente de novo (garantia extra)
+            self._cancel_all_tasks()
+            # Espera um pouco para as tasks finalizarem após cancelamento
+            await asyncio.sleep(0.5)
 
         logger.info("--- Loop principal (_run_main_loop) Concluído ---")
-# --- Fim da função corrigida ---
 
 
 # --- Ponto de Entrada Principal ---
 
 async def main():
     """Função principal assíncrona: parseia args, carrega modelos, inicia o loop."""
-
-    # --- DECLARAÇÃO GLOBAL MOVIDA PARA O INÍCIO DA FUNÇÃO ---
+    # --- CORREÇÃO: Declaração global movida para o início da função ---
     # Declara que vamos modificar essas variáveis globais dentro desta função.
-    # Isso deve vir ANTES de qualquer uso delas (leitura ou escrita) aqui.
-    global YOLO_MODEL_PATH, SAM2_MODEL_TYPE, SAM2_CHECKPOINT_PATH, MIDAS_MODEL_NAME, KNOWN_FACES_DIR
-    # --- FIM DA CORREÇÃO ---
+    global YOLO_MODEL_PATH, SAM_MODEL_TYPE, SAM_CHECKPOINT_PATH, MIDAS_MODEL_NAME, KNOWN_FACES_DIR, VISION_API_CREDENTIALS, GEMINI_MODEL_NAME
 
     parser = argparse.ArgumentParser(description="Trackie - Assistente Visual com IA e Gemini")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"],
@@ -2151,34 +2453,47 @@ async def main():
     parser.add_argument("--user-name", type=str, default=DEFAULT_USER_NAME,
                         help="Nome do usuário para interação com Gemini. Default: Usuário")
 
-    # Agora o uso como default é válido, pois o 'global' já foi declarado antes
+    # Argumentos para configurar caminhos e modelos via linha de comando
+    # Usam as variáveis globais como default, o que agora é seguro após a declaração 'global'
     parser.add_argument("--yolo-model", type=str, default=YOLO_MODEL_PATH,
                         help=f"Caminho para o modelo YOLO (ex: yolov8n.pt). Default: '{YOLO_MODEL_PATH}'")
-    parser.add_argument("--sam-model", type=str, default=SAM2_MODEL_TYPE,
-                        help=f"Tipo do modelo SAM2 (ex: vit_h, hiera_large). Default: '{SAM2_MODEL_TYPE}'")
-    parser.add_argument("--sam-ckpt", type=str, default=SAM2_CHECKPOINT_PATH,
-                        help=f"Caminho para o checkpoint SAM2 (.pth/.pt). Default: '{SAM2_CHECKPOINT_PATH}'")
+    parser.add_argument("--sam-model-type", type=str, default=SAM_MODEL_TYPE,
+                        help=f"Tipo do modelo SAM (ex: vit_h, vit_l, vit_b). Default: '{SAM_MODEL_TYPE}'")
+    parser.add_argument("--sam-ckpt", type=str, default=SAM_CHECKPOINT_PATH,
+                        help=f"Caminho para o checkpoint SAM (.pth/.pt). Default: '{SAM_CHECKPOINT_PATH}'")
     parser.add_argument("--midas-model", type=str, default=MIDAS_MODEL_NAME,
-                        help=f"Nome do modelo MiDaS/DPT no HuggingFace (ex: Intel/dpt-large). Default: '{MIDAS_MODEL_NAME}'")
+                        help=f"Nome do modelo MiDaS/DPT no HuggingFace. Default: '{MIDAS_MODEL_NAME}'")
     parser.add_argument("--faces-db", type=str, default=KNOWN_FACES_DIR,
                         help=f"Diretório do banco de dados de faces conhecidas. Default: '{KNOWN_FACES_DIR}'")
-    # Add mais args se necessário (taxa de FPS, etc.)
+    parser.add_argument("--vision-creds", type=str, default=VISION_API_CREDENTIALS,
+                        help=f"Caminho para credenciais Google Cloud Vision JSON. Default: '{VISION_API_CREDENTIALS}'")
+    parser.add_argument("--gemini-model", type=str, default=GEMINI_MODEL_NAME,
+                        help=f"Nome do modelo Gemini a ser usado. Default: '{GEMINI_MODEL_NAME}'")
 
     args = parser.parse_args()
 
-    # Atualiza configurações globais baseadas nos args (importante para load_models)
-    # A declaração 'global' no início permite estas atribuições às variáveis globais.
+    # Atualiza configurações globais baseadas nos args (importante para load_models e inicialização do Gemini)
     YOLO_MODEL_PATH = args.yolo_model
-    SAM2_MODEL_TYPE = args.sam_model
-    SAM2_CHECKPOINT_PATH = args.sam_ckpt
+    SAM_MODEL_TYPE = args.sam_model_type
+    SAM_CHECKPOINT_PATH = args.sam_ckpt
     MIDAS_MODEL_NAME = args.midas_model
     KNOWN_FACES_DIR = args.faces_db
+    VISION_API_CREDENTIALS = args.vision_creds
+    GEMINI_MODEL_NAME = args.gemini_model # Atualiza o nome do modelo Gemini a ser usado
 
-    logger.info(f"Configuração Final - YOLO Model Path: {YOLO_MODEL_PATH}")
-    logger.info(f"Configuração Final - SAM2 Model Type: {SAM2_MODEL_TYPE}")
-    logger.info(f"Configuração Final - SAM2 Checkpoint Path: {SAM2_CHECKPOINT_PATH}")
-    logger.info(f"Configuração Final - MiDaS Model Name: {MIDAS_MODEL_NAME}")
-    logger.info(f"Configuração Final - Known Faces Dir: {KNOWN_FACES_DIR}")
+    # Log das configurações finais usadas
+    logger.info("--- Configurações de Execução ---")
+    logger.info(f"Device IA: {args.device}")
+    logger.info(f"Modo Vídeo: {args.video_mode}")
+    logger.info(f"Nome Usuário: {args.user_name}")
+    logger.info(f"Modelo YOLO: {YOLO_MODEL_PATH}")
+    logger.info(f"Modelo SAM Tipo: {SAM_MODEL_TYPE}")
+    logger.info(f"Modelo SAM Ckpt: {SAM_CHECKPOINT_PATH}")
+    logger.info(f"Modelo MiDaS: {MIDAS_MODEL_NAME}")
+    logger.info(f"DB Faces: {KNOWN_FACES_DIR}")
+    logger.info(f"Credenciais Vision: {VISION_API_CREDENTIALS}")
+    logger.info(f"Modelo Gemini: {GEMINI_MODEL_NAME}")
+    logger.info("---------------------------------")
 
 
     # Determina o dispositivo de IA
@@ -2187,6 +2502,11 @@ async def main():
         if torch.cuda.is_available():
              selected_device = 'cuda'
              logger.info("Dispositivo CUDA detectado e selecionado.")
+             try:
+                 logger.info(f"Nome GPU: {torch.cuda.get_device_name(0)}")
+                 logger.info(f"Memória GPU Total: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+             except Exception as e_cuda:
+                 logger.warning(f"Não foi possível obter detalhes da GPU: {e_cuda}")
         else:
              selected_device = 'cpu'
              logger.info("CUDA não disponível, selecionando CPU.")
@@ -2199,43 +2519,56 @@ async def main():
 
     # --- Carregar Modelos ANTES de iniciar o loop ---
     # Esta chamada é bloqueante e pode demorar
-    # A função load_models usa as variáveis globais que foram atualizadas acima.
     load_models(selected_device)
+
+    # --- (Re)Inicializar Cliente Gemini com o nome do modelo correto ---
+    # Isso é necessário caso o nome do modelo tenha sido alterado via args
+    global gemini_client_model # Precisa redeclarar global para modificar
+    try:
+        logger.info(f"Reconfigurando/Verificando cliente Gemini para usar modelo: {GEMINI_MODEL_NAME}")
+        genai.configure(api_key=API_KEY) # Reconfigura a key (geralmente seguro)
+        gemini_client_model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL_NAME,
+            system_instruction=SYSTEM_INSTRUCTION
+        )
+        logger.info(f"Modelo Generativo Gemini '{GEMINI_MODEL_NAME}' reconfirmado/inicializado.")
+    except Exception as e_reinit:
+        logger.critical(f"Erro crítico ao re-inicializar o cliente Gemini com o modelo '{GEMINI_MODEL_NAME}': {e_reinit}", exc_info=True)
+        sys.exit(1)
 
 
     # --- Criar e Iniciar Instância Principal ---
-    try:
-        # ---> SUBSTITUÍDO: Passa 'client', 'genai', e 'glm' definidos DENTRO de main <---
-        audio_loop_instance = AudioLoop(
-            video_mode=args.video_mode,
-            user_name=args.user_name,
-            device=selected_device,
-            gemini_client=client,   # Passa a instância do cliente criada em main
-            genai_module=genai,     # Passa o módulo genai importado em main
-            glm_module=glm          # Passa o módulo glm importado em main
-        )
-        # ---> FIM DA SUBSTITUIÇÃO <---
-    except Exception as loop_init_err:
-         logger.critical(f"Falha CRÍTICA ao inicializar AudioLoop: {loop_init_err}", exc_info=True)
-         sys.exit(1) # Não pode continuar sem a instância principal
+    audio_loop = AudioLoop(video_mode=args.video_mode, user_name=args.user_name, device=selected_device)
 
     # --- Capturar Sinais de Encerramento (Ctrl+C) ---
     loop = asyncio.get_running_loop()
     stop_signals = (signal.SIGINT, signal.SIGTERM)
+
+    # Função wrapper para passar argumentos ao handler
+    def signal_handler_wrapper(s, event):
+        # Cria uma task para rodar o handler assíncrono sem bloquear o handler do sinal
+        asyncio.create_task(shutdown_signal_handler(s, event))
+
     for sig in stop_signals:
          loop.add_signal_handler(
               sig,
-              lambda s=sig: asyncio.create_task(shutdown_signal_handler(s, audio_loop.shutdown_event))
+              # Usa lambda para capturar o valor atual de sig e audio_loop.shutdown_event
+              lambda s=sig, evt=audio_loop.shutdown_event: signal_handler_wrapper(s, evt)
          )
+    logger.info("Handlers de sinal (SIGINT, SIGTERM) configurados.")
 
     try:
         # O método _run_main_loop agora é executado após a configuração correta
         await audio_loop._run_main_loop()
 
+    except asyncio.CancelledError:
+        logger.info("Loop principal (main) foi cancelado.")
+        # O finally cuidará da limpeza
     except Exception as main_err:
-        logger.critical(f"Erro fatal não capturado no loop principal: {main_err}", exc_info=True)
+        logger.critical(f"Erro fatal não capturado no loop principal (main): {main_err}", exc_info=True)
         # Tenta sinalizar shutdown mesmo em caso de erro fatal
-        audio_loop.shutdown_event.set()
+        if 'audio_loop' in locals() and audio_loop and audio_loop.shutdown_event:
+            audio_loop.shutdown_event.set()
     finally:
         logger.info("Programa principal (main) finalizando...")
         # --- Limpeza Global Final ---
@@ -2250,14 +2583,15 @@ async def main():
 
         logger.info("--- Aplicação Encerrada ---")
 
-# Restante do código permanece igual... (incluindo if __name__ == "__main__":)
-
 
 async def shutdown_signal_handler(signal_received, shutdown_event: asyncio.Event):
-    """ Handler para sinais SIGINT/SIGTERM. """
-    logger.warning(f"Recebido sinal de encerramento: {signal_received.name}. Iniciando shutdown...")
+    """ Handler assíncrono para sinais SIGINT/SIGTERM. """
+    # Verifica se o evento já foi setado para evitar logs repetidos
     if not shutdown_event.is_set():
+        logger.warning(f"Recebido sinal de encerramento: {signal_received.name}. Iniciando shutdown...")
         shutdown_event.set() # Sinaliza para todas as tasks que usam o evento
+    else:
+        logger.info(f"Sinal de encerramento {signal_received.name} recebido, mas shutdown já em progresso.")
     # Não fazer sys.exit aqui, deixar o loop principal terminar graciosamente
 
 
@@ -2271,12 +2605,14 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         # Isso pode acontecer se o Ctrl+C for pressionado ANTES do loop asyncio ser totalmente estabelecido
+        # ou se o handler de sinal falhar por algum motivo.
         logger.info("KeyboardInterrupt capturado no nível mais externo. Encerrando.")
     except Exception as e_top:
-        logger.critical(f"Exceção não tratada no nível raiz: {e_top}", exc_info=True)
+        logger.critical(f"Exceção não tratada no nível raiz (__main__): {e_top}", exc_info=True)
         # Tenta garantir que PyAudio seja finalizado se possível
         if pya:
             try: pya.terminate()
-            except: pass
+            except: pass # Ignora erros ao terminar pya aqui
     finally:
-        logging.shutdown() # Garante que todos os logs foram escritos
+        # Garante que todos os logs em buffer sejam escritos antes de sair
+        logging.shutdown()
