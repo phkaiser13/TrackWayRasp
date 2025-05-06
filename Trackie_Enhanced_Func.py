@@ -55,8 +55,7 @@ except Exception as e:
 sam_model_registry, SamPredictor = None, None
 try:
     # ### CORREÇÃO: Mantendo apenas a importação de 'segment_anything' ###
-    from sam2.build_sam import build_sam2
-    from sam2.sam2_image_predictor import SAM2ImagePredictor # <<< Usando esta importação
+    from segment_anything import sam_model_registry, SamPredictor # <<< Usando esta importação
     print("INFO: Usando 'segment_anything' para SAM. Ajuste a importação se usar outra biblioteca.")
     # O bloco 'sam2' foi removido para evitar duplicidade.
 except ImportError:
@@ -67,8 +66,7 @@ except Exception as e:
 
 vision = None
 try:
-    from google.cloud22 import vision # pip install google-cloud-vision
-    from google.oauth22 import service_account
+    from google.cloud import vision # pip install google-cloud-vision
 except ImportError:
      print("AVISO: Biblioteca 'google-cloud-vision' não encontrada. Cloud Vision será desativado.")
 except Exception as e:
@@ -81,14 +79,14 @@ YOLO_MODEL_PATH = "/home/raspsenai/yolov8n.pt" # Exemplo: /path/to/your/yolov8n.
 # ### CORREÇÃO: Renomeando variáveis SAM2 para SAM ###
 # SAM_MODEL_TYPE: O tipo DEVE corresponder aos tipos disponíveis no `sam_model_registry` da biblioteca importada
 # Tipos comuns para 'segment-anything': "vit_h", "vit_l", "vit_b"
-SAM_MODEL_TYPE = "sam2.1_hiera_large.pt" # Exemplo: "vit_h" (Huge), "vit_l" (Large), "vit_b" (Base) - AJUSTE CONFORME SEU CHECKPOINT
-SAM_CHECKPOINT_PATH = "/home/raspsenai/sam2/checkpoints/sam2.1_hiera_large.pt" # Exemplo: /path/to/your/sam_vit_h_4b8939.pth
-#MIDAS_MODEL_NAME = "Intel/dpt-large" # Modelo MiDaS v3.1 (DPT Large) - bom equilíbrio
+SAM_MODEL_TYPE = "vit_h" # Exemplo: "vit_h" (Huge), "vit_l" (Large), "vit_b" (Base) - AJUSTE CONFORME SEU CHECKPOINT
+SAM_CHECKPOINT_PATH = "/home/raspsenai/sam_vit_h_4b8939.pth" # Exemplo: /path/to/your/sam_vit_h_4b8939.pth
+MIDAS_MODEL_NAME = "Intel/dpt-large" # Modelo MiDaS v3.1 (DPT Large) - bom equilíbrio
 # MIDAS_MODEL_NAME = "Intel/dpt-hybrid-midas" # Modelo híbrido (mais rápido, menos preciso)
-MIDAS_MODEL_NAME = "Intel/dpt-swinv2-large-384" # Modelo usado no código original (requer transformers >= 4.36?)
+# MIDAS_MODEL_NAME = "Intel/dpt-swinv2-large-384" # Modelo usado no código original (requer transformers >= 4.36?)
 # MIDAS_WEIGHTS_PATH = "/home/raspsenai/MiDaS/weights/dpt_swin2_large_384.pt" # Não é mais necessário com from_pretrained
 KNOWN_FACES_DIR = "/home/raspsenai/known_faces" # Exemplo: /path/to/your/known_faces
-VISION_API_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/raspsenai/gen-lang-client-0852835896-20aea750a4bd.json") # Exemplo: /path/to/your/credentials.json
+VISION_API_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/raspsenai/google-json-creds.json") # Exemplo: /path/to/your/credentials.json
 # ### CORREÇÃO: Unificando nome da variável do modelo Gemini ###
 GEMINI_MODEL_NAME = "gemini-1.5-flash-latest" # Usar o modelo mais recente recomendado (Julho 2024)
 # GEMINI_MODEL_NAME = "models/gemini-1.5-pro-latest" # Modelo Pro (mais poderoso, mais caro)
@@ -182,13 +180,13 @@ try:
         candidate_count=1,
         # stop_sequences=["..."], # Opcional
         # max_output_tokens=..., # Opcional
-        temperature=0.2, # Ajustar para criatividade vs factualidade
+        temperature=0.7, # Ajustar para criatividade vs factualidade
     )
     # Nota: As ferramentas (tools) seriam adicionadas aqui se usadas
     logger.info("Configuração de geração Gemini definida.")
 
 except ImportError:
-    logger.critical("Biblioteca 'google-genai' não encontrada. Instale com 'pip install google-genai'. Encerrando.")
+    logger.critical("Biblioteca 'google-genai' não encontrada. Instale com 'pip install google-generativeai'. Encerrando.")
     sys.exit(1)
 # ### CORREÇÃO: Substituindo 'catch' por 'except' ###
 except Exception as e:
@@ -218,8 +216,7 @@ cloud_vision_client = None
 
 def load_models(device: str):
     """Carrega os modelos de IA para o dispositivo especificado (CPU ou GPU)."""
-    
-    global yolo_model, sam_predictor, midas_processor, midas_model, cloud_vision_client, DeepFace
+    global yolo_model, sam_predictor, midas_processor, midas_model, cloud_vision_client
     logger.info(f"Iniciando carregamento de modelos para o dispositivo: {device}...")
     start_time = time.monotonic()
 
@@ -317,7 +314,7 @@ def load_models(device: str):
                  os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
              elif not os.path.isdir(KNOWN_FACES_DIR):
                  logger.error(f"O caminho para faces conhecidas '{KNOWN_FACES_DIR}' existe mas não é um diretório!")
-                 DeepFace = False # Desativa DeepFace se o caminho for inválido
+                 DeepFace = None # Desativa DeepFace se o caminho for inválido
              else:
                  logger.info(f"Diretório para banco de dados de faces DeepFace: '{KNOWN_FACES_DIR}'.")
                  # Teste rápido opcional para forçar carregamento inicial de algum modelo (pode ser LENTO!)
@@ -330,7 +327,7 @@ def load_models(device: str):
                  logger.info("DeepFace parece estar disponível. Modelos serão carregados sob demanda nas análises.")
          except Exception as e:
              logger.error(f"Erro durante a verificação inicial do DeepFace (ex: criação do diretório '{KNOWN_FACES_DIR}'): {e}", exc_info=True)
-             DeepFace = False # Desativa em caso de erro
+             DeepFace = None # Desativa em caso de erro
     else:
         logger.warning("DeepFace desativado (biblioteca 'deepface' não importada ou KNOWN_FACES_DIR não definido/inválido).")
 
@@ -1176,7 +1173,6 @@ class AudioLoop:
         gcp_vision = None
         try:
             from google.cloud import vision as gcp_vision
-            from google.oauth2 import service_account
         except ImportError:
              logger.error("Falha ao reimportar google.cloud.vision dentro da task. Encerrando task.")
              return
