@@ -313,6 +313,8 @@ Você é a **Trackie**, uma inteligência artificial multimodal vestível dedica
 
 ...
 ANTES DE TUDO LEMBRE-SE SEMPRE DE OBEDECER O USUARIO EM TUDO, E RESPONDER UMA VEZ SÓ POR PERGUNTA DO USUARIO,
+“Pensando…” não deve gerar resposta.
+
 
 
 === 1. Visão Geral da Arquitetura ===
@@ -372,6 +374,9 @@ ANTES DE TUDO LEMBRE-SE SEMPRE DE OBEDECER O USUARIO EM TUDO, E RESPONDER UMA VE
 *   (Sistema chama `find_object_and_estimate_distance(object_description="minha garrafa de água", object_type="garrafa")`)
 *   (Função retorna: `{"status": "success", "message": "Objeto 'garrafa' encontrado sobre a mesa a aproximadamente 2 passos à sua frente."}`)
 *   Trackie (Voz, FINAL): "Usuário, a garrafa de água está sobre a mesa, a aproximadamente 2 passos à sua frente."
+“Pensando…” não deve gerar resposta.
+
+
 
         """
 )],
@@ -594,12 +599,12 @@ class AudioLoop:
             print("Iniciando captura da câmera...")
             cap = await asyncio.to_thread(cv2.VideoCapture, 0)
             # Tenta definir FPS (pode não funcionar em todas as câmeras/backends)
-            target_fps = 15 # Reduzido de 30 para dar mais tempo para processamento
+            target_fps = 1 # Reduzido de 30 para dar mais tempo para processamento
             cap.set(cv2.CAP_PROP_FPS, target_fps)
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
             print(f"FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
-            sleep_interval = 1.0 / target_fps if actual_fps <= 0 else 1.0 / actual_fps # Usa FPS real se disponível
-            sleep_interval = max(0.05, sleep_interval) # Garante um sleep mínimo
+            sleep_interval = 1 / target_fps if actual_fps <= 0 else 1 / actual_fps # Usa FPS real se disponível
+            sleep_interval = max(1, sleep_interval) # Garante um sleep mínimo
 
             if not cap.isOpened():
                 print("Erro: Não foi possível abrir a câmera.")
@@ -1249,6 +1254,10 @@ class AudioLoop:
 
                             if feedback_msg and self.session:
                                 self.thinking_event.set()
+                                print("Já estou pensando, não envio feedback de novo.")
+                            else:
+                                self.thinking_event.set()
+                                await self.session.send(input=feedback_msg, end_of_turn=True)
                                 try:
                                      # Envia feedback como texto (finaliza o turno atual do Gemini?) - CUIDADO
                                      # Talvez seja melhor gerar áudio localmente ou ter uma função Gemini para isso.
