@@ -17,7 +17,7 @@ from PIL import Image
 import mss
 from google import genai
 from google.genai import types
-from google.genai import errors
+from google.genai import errors # Importado para referência, embora não usado diretamente na correção
 from google.protobuf.struct_pb2 import Value # Mantido, pois é usado
 from ultralytics import YOLO
 import numpy as np
@@ -37,7 +37,7 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-2.0-flash-live-001" # Ajuste se necessário para seu modelo específico
 DEFAULT_MODE = "camera"
-BaseDir = "C:/Users/Administrator/Desktop/shelltrack/"
+BaseDir = "C:/Users/Administrator/Desktop/shelltrack/" # Mantido do segundo bloco de código
 
 # YOLO
 YOLO_MODEL_PATH = os.path.join(BaseDir, "yolov8n.pt")
@@ -243,7 +243,7 @@ METERS_PER_STEP = 0.7
 
 # --- Configuração do Cliente Gemini ---
 # Substitua pela sua chave de API real
-API_KEY = os.environ.get("GEMINI_API_KEY") 
+API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     # Tenta carregar de um arquivo .env se existir (opcional, para desenvolvimento local)
     try:
@@ -268,7 +268,7 @@ client = genai.Client(
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
     types.Tool(google_search=types.GoogleSearch()),
-    types.Tool(code_execution=types.ToolCodeExecution),
+    types.Tool(code_execution=types.ToolCodeExecution()),
     types.Tool(
         function_declarations=[
             types.FunctionDeclaration(
@@ -504,7 +504,7 @@ class AudioLoop:
         """Captura um frame, processa com YOLO e prepara para envio (Função Síncrona)."""
         ret, frame = cap.read()
         latest_frame_copy = None
-        current_yolo_results = None 
+        current_yolo_results = None
 
         if ret:
             latest_frame_copy = frame.copy()
@@ -515,7 +515,7 @@ class AudioLoop:
             frame_rgb = cv2.cvtColor(latest_frame_copy, cv2.COLOR_BGR2RGB)
             try:
                 results = self.yolo_model.predict(frame_rgb, verbose=False, conf=YOLO_CONFIDENCE_THRESHOLD)
-                current_yolo_results = results 
+                current_yolo_results = results
 
                 if self.show_preview:
                     display_frame = latest_frame_copy.copy()
@@ -531,7 +531,7 @@ class AudioLoop:
                             label = f"{class_name_yolo} {conf:.2f}"
                             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                             cv2.putText(display_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                        
+
                         # Verifica se class_name_yolo está em alguma das listas dentro de DANGER_CLASSES.values()
                         is_dangerous = any(class_name_yolo in danger_list for danger_list in DANGER_CLASSES.values())
                         if is_dangerous and conf >= YOLO_CONFIDENCE_THRESHOLD:
@@ -545,11 +545,11 @@ class AudioLoop:
         with self.frame_lock:
             if ret:
                 self.latest_bgr_frame = latest_frame_copy
-                self.latest_yolo_results = current_yolo_results 
+                self.latest_yolo_results = current_yolo_results
             else:
                 self.latest_bgr_frame = None
                 self.latest_yolo_results = None
-                return None, [] 
+                return None, []
 
         if self.show_preview and display_frame is not None:
             try:
@@ -572,7 +572,7 @@ class AudioLoop:
                 self.preview_window_active = False
 
         image_part = None
-        if ret: 
+        if ret:
             try:
                 if 'frame_rgb' not in locals() or frame_rgb is None: # Adicionado 'or frame_rgb is None'
                      frame_rgb = cv2.cvtColor(latest_frame_copy, cv2.COLOR_BGR2RGB)
@@ -595,11 +595,11 @@ class AudioLoop:
         try:
             print("Iniciando captura da câmera...")
             cap = await asyncio.to_thread(cv2.VideoCapture, 0)
-            target_fps = 1 
+            target_fps = 1
             cap.set(cv2.CAP_PROP_FPS, target_fps)
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
             print(f"FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
-            
+
             # Calcula sleep_interval com base no FPS real ou alvo, garantindo no mínimo 0.1s para evitar busy-looping excessivo
             # e no máximo 1.0s se FPS for muito baixo ou não detectado.
             if actual_fps > 0:
@@ -641,7 +641,7 @@ class AudioLoop:
                 if image_part is not None and self.out_queue:
                     try:
                         if self.out_queue.full():
-                            await self.out_queue.get() 
+                            await self.out_queue.get()
                             # print("Aviso: Fila de saída cheia, descartando frame antigo.") # Log opcional
                         self.out_queue.put_nowait(image_part)
                     except asyncio.QueueFull:
@@ -688,12 +688,12 @@ class AudioLoop:
 
     def _get_screen(self) -> Optional[Dict[str, Any]]:
         sct = mss.mss()
-        monitor_number = 1 
+        monitor_number = 1
         try:
             if len(sct.monitors) > monitor_number:
                  monitor = sct.monitors[monitor_number]
             elif sct.monitors: # Se não houver monitor 1, mas houver algum monitor
-                 monitor = sct.monitors[0] 
+                 monitor = sct.monitors[0]
             else: # Nenhum monitor encontrado
                 print("Erro: Nenhum monitor detectado por mss.")
                 return None
@@ -718,7 +718,7 @@ class AudioLoop:
             while not self.stop_event.is_set():
                 frame_data = await asyncio.to_thread(self._get_screen)
                 if frame_data is None:
-                    await asyncio.sleep(1.0) 
+                    await asyncio.sleep(1.0)
                     continue
 
                 if self.out_queue:
@@ -727,8 +727,8 @@ class AudioLoop:
                              await self.out_queue.get()
                          self.out_queue.put_nowait(frame_data)
                     except asyncio.QueueFull:
-                         pass 
-                await asyncio.sleep(1.0) 
+                         pass
+                await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             print("get_screen cancelado.")
         except Exception as e:
@@ -744,7 +744,7 @@ class AudioLoop:
                 if self.thinking_event.is_set():
                     await asyncio.sleep(0.05)
                     continue
-                
+
                 if not self.out_queue: # Verifica se out_queue foi inicializada
                     await asyncio.sleep(0.1)
                     continue
@@ -769,7 +769,7 @@ class AudioLoop:
                         await self.session.send(input=msg)
                     elif isinstance(msg, str): # Para alertas ou texto informativo (embora não seja o uso principal aqui)
                         print(f"Enviando texto via send_realtime (raro): {msg}")
-                        await self.session.send(input=msg, end_of_turn=False) 
+                        await self.session.send(input=msg, end_of_turn=False)
                     else:
                         print(f"Mensagem desconhecida em send_realtime: {type(msg)}")
                     if self.out_queue: self.out_queue.task_done()
@@ -809,8 +809,8 @@ class AudioLoop:
 
             while not self.stop_event.is_set():
                 if self.thinking_event.is_set():
-                    await asyncio.sleep(0.05) 
-                    continue 
+                    await asyncio.sleep(0.05)
+                    continue
 
                 if not audio_stream or not audio_stream.is_active():
                      print("Stream de áudio de entrada não está ativo. Encerrando listen_audio.")
@@ -892,9 +892,9 @@ class AudioLoop:
             # Pega o primeiro rosto detectado (o mais proeminente)
             face_data = detected_faces[0]['facial_area']
             x, y, w, h = face_data['x'], face_data['y'], face_data['w'], face_data['h']
-            
+
             # Adiciona uma pequena margem para garantir que o rosto inteiro seja capturado
-            margin = 10 
+            margin = 10
             y1, y2 = max(0, y - margin), min(frame_to_process.shape[0], y + h + margin)
             x1, x2 = max(0, x - margin), min(frame_to_process.shape[1], x + w + margin)
             face_image = frame_to_process[y1:y2, x1:x2]
@@ -978,14 +978,14 @@ class AudioLoop:
                     if DEEPFACE_DISTANCE_METRIC in col.lower():
                         distance_col_name = col
                         break
-            
+
             if distance_col_name is None:
                 print(f"[DeepFace] Erro: Coluna de distância não encontrada no DataFrame. Colunas: {df.columns.tolist()}")
                 return "Erro ao processar resultado da identificação (coluna de distância)."
 
             df = df.sort_values(by=distance_col_name, ascending=True)
             best_match = df.iloc[0]
-            
+
             best_match_identity_path = best_match['identity']
             # O nome da pessoa é o nome do diretório pai do arquivo de imagem
             person_name = os.path.basename(os.path.dirname(best_match_identity_path))
@@ -1029,7 +1029,7 @@ class AudioLoop:
                 prediction = torch.nn.functional.interpolate(
                     prediction.unsqueeze(1),
                     size=img_rgb.shape[:2],
-                    mode="bicubic", 
+                    mode="bicubic",
                     align_corners=False,
                 ).squeeze()
             depth_map = prediction.cpu().numpy()
@@ -1042,12 +1042,12 @@ class AudioLoop:
     def _find_best_yolo_match(self, object_type: str, yolo_results: List[Any]) -> Optional[Tuple[Dict[str, int], float, str]]:
         best_match = None
         highest_conf = -1.0
-        target_yolo_classes = YOLO_CLASS_MAP.get(object_type.lower(), [object_type.lower()]) 
+        target_yolo_classes = YOLO_CLASS_MAP.get(object_type.lower(), [object_type.lower()])
 
         if not yolo_results or not self.yolo_model: # Adicionado self.yolo_model
              return None
 
-        for result in yolo_results: 
+        for result in yolo_results:
             if hasattr(result, 'boxes') and result.boxes: # Verifica se há caixas neste resultado
                 for box in result.boxes:
                     if not (hasattr(box, 'cls') and hasattr(box, 'conf') and hasattr(box, 'xyxy')):
@@ -1060,7 +1060,7 @@ class AudioLoop:
                     conf_tensor = box.conf
                     if conf_tensor.nelement() == 0: continue
                     conf = float(conf_tensor[0])
-                    
+
                     class_name = self.yolo_model.names[cls_id]
 
                     if class_name in target_yolo_classes:
@@ -1075,7 +1075,7 @@ class AudioLoop:
 
     def _estimate_direction(self, bbox: Dict[str, int], frame_width: int) -> str:
         box_center_x = (bbox['x1'] + bbox['x2']) / 2
-        center_zone_width = frame_width / 3 
+        center_zone_width = frame_width / 3
 
         if box_center_x < center_zone_width:
             return "à sua esquerda"
@@ -1108,14 +1108,14 @@ class AudioLoop:
                     cls_id_tensor = box.cls
                     if cls_id_tensor.nelement() == 0: continue
                     cls_id = int(cls_id_tensor[0])
-                    
+
                     class_name = self.yolo_model.names[cls_id]
 
                     if class_name in surface_yolo_names:
                         coords_tensor = box.xyxy[0]
                         if coords_tensor.nelement() < 4: continue
                         s_x1, s_y1, s_x2, s_y2 = map(int, coords_tensor)
-                        
+
                         # Heurística melhorada:
                         # 1. O centro X do objeto alvo está dentro da largura da superfície.
                         # 2. A base do objeto alvo (target_bottom_y) está acima do topo da superfície (s_y1)
@@ -1128,7 +1128,7 @@ class AudioLoop:
                         on_top_of_surface = (s_y1 - y_tolerance) < target_bottom_y < (s_y1 + y_tolerance * 2) # Objeto repousa perto do topo
                         horizontally_aligned = s_x1 < target_center_x < s_x2
                         # Adicional: objeto não deve estar completamente abaixo da superfície
-                        # not_completely_under = target_bottom_y < s_y2 + y_tolerance 
+                        # not_completely_under = target_bottom_y < s_y2 + y_tolerance
 
                         if horizontally_aligned and on_top_of_surface: # and not_completely_under:
                             return True
@@ -1143,13 +1143,13 @@ class AudioLoop:
         with self.frame_lock:
             if self.latest_bgr_frame is not None:
                 frame_to_process = self.latest_bgr_frame.copy()
-                yolo_results_for_frame = self.latest_yolo_results 
+                yolo_results_for_frame = self.latest_yolo_results
                 if frame_to_process is not None: # Adicionado para segurança
                     frame_height, frame_width, _ = frame_to_process.shape
             else:
                  print("[Localizar Objeto] Erro: Nenhum frame disponível.")
                  return f"Usuário, não estou enxergando nada no momento para localizar o {object_type}."
-        
+
         if frame_width == 0 or frame_height == 0: # Checagem adicional
             print("[Localizar Objeto] Erro: Dimensões do frame inválidas.")
             return f"Usuário, problema ao processar a imagem para localizar o {object_type}."
@@ -1178,7 +1178,7 @@ class AudioLoop:
         print(f"[Localizar Objeto] Melhor correspondência YOLO: Classe '{detected_class}', Conf: {confidence:.2f}, BBox: {target_bbox}")
 
         is_on_surface = self._check_if_on_surface(target_bbox, yolo_results_for_frame)
-        surface_msg = "sobre uma superfície (como uma mesa)" if is_on_surface else "" 
+        surface_msg = "sobre uma superfície (como uma mesa)" if is_on_surface else ""
 
         direction = self._estimate_direction(target_bbox, frame_width)
         depth_map = None
@@ -1212,7 +1212,7 @@ class AudioLoop:
                         estimated_meters = np.random.uniform(3.5, 7.0)
                     else: # Longe
                         estimated_meters = np.random.uniform(7.0, 15.0)
-                    
+
                     estimated_meters = max(0.5, min(estimated_meters, 20)) # Limita
                     distance_steps = round(estimated_meters / METERS_PER_STEP)
                     print(f"[Localizar Objeto] Profundidade MiDaS no centro ({center_y},{center_x}): {depth_value:.4f}, Metros Estimados (heurístico): {estimated_meters:.2f}, Passos: {distance_steps}")
@@ -1220,26 +1220,26 @@ class AudioLoop:
                      print("[Localizar Objeto] Valor de profundidade MiDaS inválido ou muito baixo no centro do objeto.")
             except Exception as e_depth:
                 print(f"[Localizar Objeto] Erro ao extrair profundidade do MiDaS: {e_depth}")
-                distance_steps = -1 
+                distance_steps = -1
         else:
              print("[Localizar Objeto] MiDaS não disponível ou falhou. Não é possível estimar distância.")
 
         # Usa object_description para a resposta, pois é mais específico que object_type
-        object_name_for_response = object_description 
+        object_name_for_response = object_description
 
         response_parts = [f"Usuário, o {object_name_for_response} está"]
         if surface_msg:
             response_parts.append(surface_msg)
-        
+
         if distance_steps > 0:
             response_parts.append(f"a aproximadamente {distance_steps} passos")
-        
+
         response_parts.append(direction + ".") # Adiciona a direção e o ponto final
 
         # Remove "está" se for a única palavra após "Usuário, o objeto..."
         if len(response_parts) == 2 and response_parts[1].endswith("está"):
             return f"Usuário, não consegui localizar o {object_name_for_response} com detalhes."
-            
+
         return " ".join(p for p in response_parts if p) # Junta as partes não vazias
 
 
@@ -1252,10 +1252,10 @@ class AudioLoop:
                 return
 
             while not self.stop_event.is_set():
-                if not self.session.is_connected:
+                if not self.session:
                     print("Sessão Gemini desconectada em receive_audio. Tentando reconectar ou aguardando.")
                     await asyncio.sleep(1) # Espera antes de verificar de novo
-                    if not self.session.is_connected: # Verifica novamente
+                    if not self.session: # Verifica novamente
                         self.stop_event.set() # Se ainda não conectada, sinaliza parada para o loop run tentar reconectar
                         break
                     else:
@@ -1282,7 +1282,7 @@ class AudioLoop:
                             user_provided_name = None
                             if response_part.text: # Gemini transcreveu o áudio ou usuário digitou texto
                                 user_provided_name = response_part.text.strip()
-                            
+
                             # Se não houver texto, mas houver um "final de turno de áudio" implícito,
                             # pode ser necessário um mecanismo mais complexo para capturar a fala do usuário.
                             # Por ora, confiamos que o Gemini fornecerá o texto se o usuário falar.
@@ -1290,10 +1290,10 @@ class AudioLoop:
                             if user_provided_name:
                                 print(f"[Trackie] Recebido nome '{user_provided_name}' para salvar rosto. Processando...")
                                 self.awaiting_name_for_save_face = False
-                                
+
                                 original_function_name_pending = "save_known_face"
 
-                                print("Pensando...") 
+                                print("Pensando...")
                                 self.thinking_event.set()
                                 voice_feedback_msg = f"Usuário, salvando rosto de {user_provided_name}, um momento..."
                                 if self.session and self.session.is_connected:
@@ -1302,7 +1302,7 @@ class AudioLoop:
                                         print(f"  [Feedback Enviado]: {voice_feedback_msg}")
                                     except Exception as e_feedback:
                                         print(f"Erro ao enviar feedback (awaiting name): {e_feedback}")
-                                
+
                                 result_message = await asyncio.to_thread(self._handle_save_known_face, user_provided_name)
 
                                 print(f"  [Trackie] Resultado da Função '{original_function_name_pending}': {result_message}")
@@ -1322,7 +1322,7 @@ class AudioLoop:
                                         print(f"Erro ao enviar FunctionResponse (awaiting name): {e_send_fc_resp}")
                                 else:
                                     print("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função (awaiting name).")
-                                
+
                                 if self.thinking_event.is_set():
                                     self.thinking_event.clear()
                                 continue # Processamos este input, vamos para o próximo response_part
@@ -1335,14 +1335,14 @@ class AudioLoop:
                             function_name = fc.name
                             args = {key: val for key, val in fc.args.items()}
                             print(f"\n[Gemini Function Call] Recebido: {function_name}, Args: {args}")
-                            
+
                             result_message = None # Inicializa para None
 
                             # Caso especial: save_known_face sem nome é tratado primeiro
                             if function_name == "save_known_face" and not args.get("person_name"):
                                 self.awaiting_name_for_save_face = True
                                 if self.thinking_event.is_set(): # Garante que não está pensando enquanto pergunta
-                                    self.thinking_event.clear() 
+                                    self.thinking_event.clear()
                                 print("[Trackie] Nome não fornecido para save_known_face. Solicitando ao usuário.")
                                 if self.session and self.session.is_connected:
                                     try:
@@ -1352,10 +1352,10 @@ class AudioLoop:
                                 # result_message permanece None, FC não será enviado neste turno
                             else:
                                 # Para todas as outras chamadas de função diretas ou save_known_face com nome:
-                                print("Pensando...") 
+                                print("Pensando...")
                                 self.thinking_event.set()
 
-                                voice_feedback_msg = f"Usuário, processando {function_name}, um momento..." 
+                                voice_feedback_msg = f"Usuário, processando {function_name}, um momento..."
                                 if function_name == "save_known_face": # Nome deve existir aqui
                                     person_name_fb = args.get('person_name', 'pessoa') # Fallback
                                     voice_feedback_msg = f"Usuário, salvando rosto de {person_name_fb}, um momento..."
@@ -1364,7 +1364,7 @@ class AudioLoop:
                                 elif function_name == "find_object_and_estimate_distance":
                                     obj_desc_fb = args.get('object_description', 'objeto')
                                     voice_feedback_msg = f"Usuário, localizando {obj_desc_fb}, um momento..."
-                                
+
                                 if self.session and self.session.is_connected:
                                     try:
                                         await self.session.send(input=voice_feedback_msg, end_of_turn=True)
@@ -1400,7 +1400,7 @@ class AudioLoop:
                                             result_message = "Descrição ou tipo do objeto não fornecido para localização."
                                     else: # Função desconhecida
                                         result_message = f"Função '{function_name}' desconhecida."
-                            
+
                             # Enviar FunctionResponse se result_message foi definido
                             if result_message is not None:
                                 print(f"  [Trackie] Resultado da Função '{function_name}': {result_message}")
@@ -1420,12 +1420,12 @@ class AudioLoop:
                                         print(f"Erro ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
                                 else:
                                     print("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função.")
-                                
-                                if self.thinking_event.is_set(): 
+
+                                if self.thinking_event.is_set():
                                      self.thinking_event.clear()
-                            # Se result_message é None (caso de save_known_face pedindo nome), 
+                            # Se result_message é None (caso de save_known_face pedindo nome),
                             # thinking_event já foi explicitamente limpo.
-                    
+
                     if not self.stop_event.is_set():
                         if has_received_data_in_turn:
                             # print("\nFim do turno de resposta do Gemini.") # Log opcional
@@ -1488,13 +1488,13 @@ class AudioLoop:
                     if bytestream is None: # Sinal de parada
                         print("Recebido sinal de encerramento (None) para play_audio.")
                         # self.stop_event.set() # Não seta stop_event aqui, deixa o run gerenciar
-                        break 
+                        break
 
                     if stream and stream.is_active():
                         await asyncio.to_thread(stream.write, bytestream)
                     else:
                         print("Stream de áudio para playback não está ativo. Descartando áudio.")
-                    
+
                     if self.audio_in_queue: self.audio_in_queue.task_done()
                 except asyncio.TimeoutError:
                     continue
@@ -1534,7 +1534,7 @@ class AudioLoop:
     async def run(self):
         print("Iniciando AudioLoop...")
         max_retries = 3
-        retry_delay_base = 1.0 
+        retry_delay_base = 1.0
 
         attempt = 0
         while attempt <= max_retries and not self.stop_event.is_set():
@@ -1553,16 +1553,12 @@ class AudioLoop:
 
                 async with client.aio.live.connect(model=MODEL, config=CONFIG) as session:
                     self.session = session
-                    print(f"Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {session.session_id if session else 'N/A'}")
+                    print(f"Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {'N/A' if not hasattr(session, 'session_id') else session.session_id}")
                     attempt = 0 # Reseta tentativas em caso de sucesso
-                    
+
                     # Recria filas para a nova sessão
                     self.audio_in_queue = asyncio.Queue()
                     self.out_queue = asyncio.Queue(maxsize=100) # Ou o tamanho que preferir
-                    
-                    # self.stop_event.clear() # Não limpa aqui, pois o loop while externo depende dele.
-                                          # O stop_event é para parar todo o AudioLoop.
-                                          # Se uma sessão termina, o TaskGroup termina e o loop run tenta de novo.
 
                     async with asyncio.TaskGroup() as tg:
                         print("Iniciando tarefas para a nova sessão...")
@@ -1578,66 +1574,76 @@ class AudioLoop:
                         tg.create_task(self.receive_audio(), name="receive_audio_task")
                         if pya: tg.create_task(self.play_audio(), name="play_audio_task")
                         print("Todas as tarefas da sessão iniciadas. Aguardando conclusão ou parada...")
-                    
+
                     print("TaskGroup da sessão finalizado.")
-                    # Se o TaskGroup terminar sem stop_event, a sessão pode ter terminado do lado do servidor.
                     if not self.stop_event.is_set():
                          print("Sessão Gemini terminou ou TaskGroup concluído. Tentando reconectar se houver tentativas restantes.")
-                         attempt += 1 
-                         # self.session será None na próxima iteração do loop while
-                    else: # Se stop_event foi setado, sai do loop de reconexão
+                         attempt += 1
+                    else:
                         break
 
 
             except asyncio.CancelledError:
                 print("Loop principal (run) cancelado.")
-                self.stop_event.set() # Garante que está setado
-                break 
-            except ExceptionGroup as eg: # Erros dentro do TaskGroup
+                self.stop_event.set()
+                break
+            except ExceptionGroup as eg:
                 print("Um ou mais erros ocorreram nas tarefas do TaskGroup:")
-                self.stop_event.set() # Assume que erros no grupo são fatais para a sessão
+                self.stop_event.set()
                 for i, exc in enumerate(eg.exceptions):
                     print(f"  Erro {i+1} na tarefa: {type(exc).__name__} - {exc}")
-                    # traceback.print_exc() # Para depuração detalhada
-                attempt += 1
-                self.session = None # Limpa sessão para próxima tentativa
-            except genai.types.LiveSessionError as lse:
-                print(f"Erro específico da LiveSession Gemini: {lse}")
-                # traceback.print_exc()
                 attempt += 1
                 self.session = None
-                if "RST_STREAM" in str(lse) or "UNAVAILABLE" in str(lse) or "DEADLINE_EXCEEDED" in str(lse):
-                    print("Erro de conexão com Gemini (RST_STREAM/UNAVAILABLE/DEADLINE).")
-                # Não seta stop_event aqui, deixa o loop de retry tentar
-            except Exception as e:
+            # except genai.types.LiveSessionError as lse: # <-- BLOCO REMOVIDO
+            #     print(f"Erro específico da LiveSession Gemini: {lse}")
+            #     # traceback.print_exc()
+            #     attempt += 1
+            #     self.session = None
+            #     if "RST_STREAM" in str(lse) or "UNAVAILABLE" in str(lse) or "DEADLINE_EXCEEDED" in str(lse):
+            #         print("Erro de conexão com Gemini (RST_STREAM/UNAVAILABLE/DEADLINE).")
+            except Exception as e: # Este bloco agora capturará os erros que antes seriam LiveSessionError
                 print(f"Erro ao conectar ou erro inesperado no método run: {type(e).__name__} - {e}")
-                traceback.print_exc()
+                traceback.print_exc() # Mantém o traceback para diagnóstico
+
+                # Lógica de print adicional para erros específicos de sessão/conexão
+                error_message_str = str(e)
+                # Convertendo para maiúsculas para correspondência insensível a maiúsculas e minúsculas, como em outras partes do código
+                error_message_upper = error_message_str.upper()
+
+                if "RST_STREAM" in error_message_upper or \
+                   "UNAVAILABLE" in error_message_upper or \
+                   "DEADLINE_EXCEEDED" in error_message_upper or \
+                   "LIVESESSION CLOSED" in error_message_upper or \
+                   "LIVESESSION NOT CONNECTED" in error_message_upper or \
+                   "CONNECTIONCLOSEDERROR" in error_message_upper: # Adicionando mais strings de erro comuns
+                    print(f"Detectado erro relacionado à sessão ou conexão Gemini: {error_message_str}")
+
                 attempt += 1
                 self.session = None
                 if attempt > max_retries:
-                     print("Máximo de tentativas de reconexão atingido após erro genérico. Encerrando.")
-                     self.stop_event.set() 
-                     break 
+                     print("Máximo de tentativas de reconexão atingido após erro. Encerrando.")
+                     self.stop_event.set()
+                     break
 
         if not self.stop_event.is_set() and attempt > max_retries:
              print("Não foi possível restabelecer a conexão com Gemini após múltiplas tentativas.")
-             self.stop_event.set() 
+             self.stop_event.set()
 
         print("Limpando recursos em AudioLoop.run()...")
-        self.stop_event.set() # Garante que todas as tarefas parem
+        self.stop_event.set()
 
         if self.session and self.session.is_connected:
             try:
                 print("Fechando sessão LiveConnect ativa...")
-                await self.session.close() # Tenta fechar explicitamente
+                await self.session.close()
                 print("Sessão LiveConnect fechada.")
             except Exception as e_close_session:
                 print(f"Erro ao fechar sessão LiveConnect: {e_close_session}")
         self.session = None
 
-        if self.audio_in_queue: # Verifica se existe antes de tentar colocar None
-            try: 
-                if not self.audio_in_queue.full(): # Verifica se não está cheia
+        if self.audio_in_queue:
+            try:
+                if not self.audio_in_queue.full():
                     self.audio_in_queue.put_nowait(None)
             except asyncio.QueueFull: pass
             except Exception as e_q_put: print(f"Erro ao colocar None na audio_in_queue: {e_q_put}")
@@ -1680,15 +1686,12 @@ if __name__ == "__main__":
         print("Feedback visual da câmera (preview) ATIVADO.")
     elif args.mode != "camera" and args.show_preview:
         print("Aviso: --show_preview só tem efeito com --mode camera.")
-    # else: # Não precisa de else aqui, o default é desativado
-    #     print("Feedback visual da câmera (preview) DESATIVADO.")
 
 
     if args.mode == "camera":
         if not os.path.exists(YOLO_MODEL_PATH):
             print(f"Erro: Modelo YOLO '{YOLO_MODEL_PATH}' Não encontrado. Verifique o caminho.")
             exit(1)
-        # A criação do DB_PATH já é feita no __init__ de AudioLoop se não existir
 
     main_loop = None
     try:
@@ -1702,7 +1705,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nInterrupção pelo teclado recebida. Encerrando...")
         if main_loop: main_loop.stop_event.set()
-    except AttributeError as ae:
+    except AttributeError as ae: # Mantido para pegar outros AttributeErrors se surgirem
         print(f"Erro de atributo no bloco __main__: {ae}")
         traceback.print_exc()
         if main_loop: main_loop.stop_event.set()
@@ -1712,8 +1715,4 @@ if __name__ == "__main__":
         if main_loop: main_loop.stop_event.set()
     finally:
         print("Bloco __main__ finalizado.")
-        # Aguarda um pouco para garantir que as tarefas de limpeza no `run` tenham chance de completar,
-        # especialmente se `stop_event` foi setado por uma exceção.
-        # asyncio.run já aguarda a conclusão da corrotina principal.
-        # Se main_loop.run() tem um finally que limpa, isso deve ser suficiente.
         print("Programa completamente finalizado.")
