@@ -1,4 +1,6 @@
 
+# 1. Importações e Dependências
+# Bibliotecas Padrão (stdlib)
 import os
 import asyncio
 import base64
@@ -15,6 +17,14 @@ import cv2
 import pyaudio
 from PIL import Image
 import mss
+# Tenta importar pandas, necessário para DeepFace.find
+try:
+    import pandas as pd
+except ImportError:
+    print("AVISO: Biblioteca 'pandas' não encontrada. 'identify_person_in_front' pode não funcionar.")
+    print("Instale com: pip install pandas")
+    pd = None # Define como None se não encontrado
+
 from google import genai
 from google.genai import types
 from google.genai import errors # Importado para referência
@@ -44,10 +54,10 @@ DEFAULT_MODE = "camera"
 BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
 
 # --- Caminho para o arquivo de prompt ---
-SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir, "Prompt's", "trackiegem1.txt")
+SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "trackiegem1.txt")
 
 # YOLO
-YOLO_MODEL_PATH = os.path.join(BaseDir, "yolov8n.pt")
+YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolov8n.pt")
 DANGER_CLASSES = {
     # (Dicionário DANGER_CLASSES inalterado - omitido para brevidade)
     'faca':             ['knife'],
@@ -197,7 +207,7 @@ YOLO_CLASS_MAP = {
 }
 
 # DeepFace
-DB_PATH = os.path.join(BaseDir, "known_faces")
+DB_PATH = os.path.join(BaseDir,"UserSettings", "known_faces")
 DEEPFACE_MODEL_NAME = 'VGG-Face'
 DEEPFACE_DETECTOR_BACKEND = 'opencv'
 DEEPFACE_DISTANCE_METRIC = 'cosine'
@@ -211,22 +221,41 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     try:
         from dotenv import load_dotenv
-        load_dotenv()
-        API_KEY = os.environ.get("GEMINI_API_KEY")
+        # Especifica o caminho para o .env se ele não estiver na raiz do projeto
+        dotenv_path = os.path.join(BaseDir, '.env') # Ajuste se necessário
+        if os.path.exists(dotenv_path):
+            load_dotenv(dotenv_path=dotenv_path)
+            API_KEY = os.environ.get("GEMINI_API_KEY")
+            print(f"Chave API carregada de: {dotenv_path}")
+        else:
+             print(f"Arquivo .env não encontrado em: {dotenv_path}")
     except ImportError:
+        print("Biblioteca python-dotenv não instalada. Não é possível carregar .env.")
         pass
+    except Exception as e_env:
+        print(f"Erro ao carregar .env: {e_env}")
+
 
 if not API_KEY:
-    print("AVISO: Chave da API Gemini não encontrada nas variáveis de ambiente ou .env. Usando chave placeholder.")
-    API_KEY = "SUA_API_KEY_AQUI" # Substitua se necessário, mas prefira variáveis de ambiente
+    print("AVISO: Chave da API Gemini não encontrada nas variáveis de ambiente ou .env.")
+    # Removido o fallback para chave placeholder para maior segurança.
+    # O código abaixo com a chave hardcoded será usado, mas NÃO É RECOMENDADO.
+    # API_KEY = "SUA_API_KEY_AQUI" # Substitua se necessário, mas prefira variáveis de ambiente
 
 # ATENÇÃO: A chave hardcoded abaixo ainda está presente. Remova-a ou substitua por API_KEY.
 # É ALTAMENTE RECOMENDADO usar a variável API_KEY carregada acima.
-client = genai.Client(
-    api_key="AIzaSyCOZU2M9mrAsx8aC4tYptfoSEwaJ3IuDZM", # <-- SUBSTITUA por API_KEY
-    # api_key=API_KEY, # <-- Use esta linha em vez da acima
-    http_options=types.HttpOptions(api_version='v1alpha')
-)
+try:
+    client = genai.Client(
+        api_key="AIzaSyCOZU2M9mrAsx8aC4tYptfoSEwaJ3IuDZM", # <-- SUBSTITUA por API_KEY ou remova se API_KEY for None
+        # api_key=API_KEY, # <-- Use esta linha em vez da acima se API_KEY for carregada
+        http_options=types.HttpOptions(api_version='v1alpha')
+    )
+    print("Cliente Gemini inicializado.")
+except Exception as e_client:
+    print(f"ERRO CRÍTICO ao inicializar cliente Gemini: {e_client}")
+    print("Verifique a API Key e a conexão.")
+    client = None # Define como None para indicar falha
+    # exit(1) # Descomente para sair se o cliente for essencial
 
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
@@ -275,19 +304,17 @@ tools = [
 ]
 
 # --- Carregar Instrução do Sistema do Arquivo ---
+system_instruction_text = "Você é um assistente prestativo." # Prompt padrão mínimo
 try:
-    with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
-        system_instruction_text = f.read()
-    print(f"Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
-except FileNotFoundError:
-    print(f"ERRO CRÍTICO: Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'.")
-    print("Usando um prompt padrão mínimo.")
-    # Fallback para um prompt mínimo se o arquivo não for encontrado
-    system_instruction_text = "Você é um assistente prestativo."
+    if not os.path.exists(SYSTEM_INSTRUCTION_PATH):
+         print(f"AVISO: Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'. Usando prompt padrão.")
+    else:
+        with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
+            system_instruction_text = f.read()
+        print(f"Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
 except Exception as e:
-    print(f"ERRO CRÍTICO ao ler o arquivo de instrução do sistema: {e}")
+    print(f"ERRO ao ler o arquivo de instrução do sistema: {e}")
     print("Usando um prompt padrão mínimo.")
-    system_instruction_text = "Você é um assistente prestativo."
     traceback.print_exc()
 
 
@@ -321,8 +348,6 @@ class AudioLoop:
     Gerencia o loop principal do assistente multimodal.
     """
     def __init__(self, video_mode: str = DEFAULT_MODE, show_preview: bool = False):
-        # (Inicialização __init__ inalterada - omitida para brevidade)
-        # ... (mesmo código de __init__ anterior) ...
         self.video_mode = video_mode
         self.show_preview = show_preview if video_mode == "camera" else False
         self.audio_in_queue: Optional[asyncio.Queue] = None
@@ -346,8 +371,12 @@ class AudioLoop:
             try:
                 self.yolo_model = YOLO(YOLO_MODEL_PATH)
                 print(f"Modelo YOLO '{YOLO_MODEL_PATH}' carregado.")
+            except FileNotFoundError:
+                 print(f"ERRO: Modelo YOLO não encontrado em '{YOLO_MODEL_PATH}'. YOLO desabilitado.")
+                 self.yolo_model = None
             except Exception as e:
                 print(f"Erro ao carregar o modelo YOLO: {e}. YOLO desabilitado.")
+                traceback.print_exc()
                 self.yolo_model = None
 
         if not os.path.exists(DB_PATH):
@@ -359,50 +388,88 @@ class AudioLoop:
 
         try:
             print("Pré-carregando modelos DeepFace...")
-            dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8) # uint8 é importante
-            DeepFace.analyze(img_path=dummy_frame, actions=['emotion'], enforce_detection=False, silent=True)
+            # Cria um frame dummy para forçar o carregamento
+            dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+            # Executa uma ação leve (emoção) sem exigir detecção
+            DeepFace.analyze(img_path=dummy_frame, actions=['emotion'], enforce_detection=False)
             print("Modelos DeepFace pré-carregados.")
         except Exception as e:
             print(f"Aviso: Erro ao pré-carregar modelos DeepFace: {e}.")
+            # traceback.print_exc() # Descomente se precisar depurar o pré-carregamento
 
         self.midas_model = None
         self.midas_transform = None
         self.midas_device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
             print(f"Carregando modelo MiDaS ({MIDAS_MODEL_TYPE}) para {self.midas_device}...")
+            # Carrega o modelo MiDaS do Torch Hub
             self.midas_model = torch.hub.load("intel-isl/MiDaS", MIDAS_MODEL_TYPE)
+            # Carrega as transformações correspondentes
             midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
             if MIDAS_MODEL_TYPE == "MiDaS_small":
                  self.midas_transform = midas_transforms.small_transform
             else:
+                 # Assume DPT transform para outros modelos (pode precisar ajustar)
                  self.midas_transform = midas_transforms.dpt_transform
+            # Move o modelo para o dispositivo (GPU ou CPU)
             self.midas_model.to(self.midas_device)
+            # Define o modelo para modo de avaliação (desativa dropout, etc.)
             self.midas_model.eval()
             print("Modelo MiDaS carregado.")
         except Exception as e:
             print(f"Erro ao carregar modelo MiDaS: {e}. Estimativa de profundidade desabilitada.")
+            # traceback.print_exc() # Descomente para depurar o carregamento do MiDaS
             self.midas_model = None
             self.midas_transform = None
 
 
     async def send_text(self):
-        # (Função send_text inalterada - omitida para brevidade)
-        print("Pronto para receber comandos de texto. Digite 'q' para sair.")
+        """Lê input de texto do usuário, trata comandos de debug e envia ao Gemini."""
+        print("Pronto para receber comandos de texto. Digite 'q' para sair, 'p' para salvar rosto (debug).")
         while not self.stop_event.is_set():
             try:
+                # Lê input do usuário em uma thread separada para não bloquear asyncio
                 text = await asyncio.to_thread(input, "message > ")
+
+                # --- Tratamento de Comandos Locais/Debug ---
                 if text.lower() == "q":
                     self.stop_event.set()
                     print("Sinal de parada ('q') recebido. Encerrando...")
-                    break
+                    break # Sai do loop while
 
+                # --- ADIÇÃO: Comando de Debug 'p' ---
+                elif text.lower() == "p":
+                    print("[DEBUG] Comando 'p' recebido. Tentando salvar rosto como 'pedro'...")
+                    if self.video_mode == "camera":
+                        # Chama a função de salvar rosto diretamente em outra thread
+                        try:
+                            # Bloqueia o 'pensamento' para evitar conflitos? Opcional.
+                            # self.thinking_event.set()
+                            print("  [DEBUG] Chamando _handle_save_known_face('pedro')...")
+                            result = await asyncio.to_thread(self._handle_save_known_face, "pedro")
+                            print(f"  [DEBUG] Resultado do salvamento direto: {result}")
+                        except Exception as e_debug_save:
+                            print(f"  [DEBUG] Erro ao tentar salvar rosto diretamente: {e_debug_save}")
+                            traceback.print_exc()
+                        # finally:
+                            # self.thinking_event.clear()
+                    else:
+                        print("  [DEBUG] Salvar rosto só funciona no modo câmera.")
+                    continue # Pula o envio para Gemini e espera o próximo input
+
+                # --- Envio Normal para Gemini ---
+                # Verifica se a sessão existe e está ativa antes de enviar
                 if self.session:
-                    print(f"Enviando texto: '{text}'")
+                    print(f"Enviando texto para Gemini: '{text}'")
+                    # Envia o texto para o Gemini, marcando o fim do turno do usuário
+                    # Envia "." se o texto estiver vazio para manter a sessão ativa
                     await self.session.send(input=text or ".", end_of_turn=True)
                 else:
+                    # Avisa se a sessão não estiver ativa
                     if not self.stop_event.is_set():
                         print("Sessão Gemini não está ativa. Não é possível enviar mensagem.")
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.5) # Evita spamming da mensagem
+
             except asyncio.CancelledError:
                 print("send_text cancelado.")
                 break
@@ -410,10 +477,14 @@ class AudioLoop:
                 print(f"Erro em send_text: {e}")
                 # Adiciona traceback para depuração em caso de erro inesperado
                 # traceback.print_exc()
-                if "LiveSession closed" in str(e) or "LiveSession not connected" in str(e):
+                # Verifica se o erro indica sessão fechada para parar
+                error_str_upper = str(e).upper()
+                if "LIVESESSION CLOSED" in error_str_upper or "LIVESESSION NOT CONNECTED" in error_str_upper:
                     print("Erro em send_text indica sessão fechada. Sinalizando parada.")
                     self.stop_event.set()
-                break
+                # Considerar parar em outros erros graves também?
+                # else: self.stop_event.set()
+                break # Sai do loop em caso de erro
         print("send_text finalizado.")
 
 
@@ -497,9 +568,9 @@ class AudioLoop:
                 if 'frame_rgb' not in locals() or frame_rgb is None: # Adicionado 'or frame_rgb is None'
                      frame_rgb = cv2.cvtColor(latest_frame_copy, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame_rgb)
-                img.thumbnail([1024, 1024])
+                img.thumbnail([1024, 1024]) # Redimensiona mantendo proporção
                 image_io = io.BytesIO()
-                img.save(image_io, format="jpeg")
+                img.save(image_io, format="jpeg", quality=85) # Ajusta qualidade JPEG
                 image_io.seek(0)
                 image_part = {
                     "mime_type": "image/jpeg",
@@ -920,7 +991,7 @@ class AudioLoop:
                 detector_backend=DEEPFACE_DETECTOR_BACKEND,
                 enforce_detection=True, # Garante que um rosto foi detectado
                 align=True,
-                silent=True
+               # silent=True
             )
 
             # Verifica se algum rosto foi detectado
@@ -1012,6 +1083,18 @@ class AudioLoop:
         start_time = time.time()
         result_message = ""
 
+        # Verifica se pandas foi importado com sucesso
+        if pd is None:
+            print("[DeepFace] Erro: Biblioteca 'pandas' não está disponível. Identificação desabilitada.")
+            result_message = "Erro interno: dependência 'pandas' faltando para identificação."
+            # --- LOGGING FIM ---
+            print(f"[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem pandas)")
+            print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            print(f"[LOG]   - Resultado: '{result_message}'")
+            # --- FIM LOGGING ---
+            return result_message
+
+
         print("[DeepFace] Iniciando identificação de pessoa...")
         frame_to_process = None
         with self.frame_lock:
@@ -1039,7 +1122,7 @@ class AudioLoop:
                 detector_backend=DEEPFACE_DETECTOR_BACKEND,
                 distance_metric=DEEPFACE_DISTANCE_METRIC,
                 enforce_detection=True, # Alterado para True para buscar rostos mais claros
-                silent=True,
+                #silent=True,
                 align=True
             )
 
@@ -1116,10 +1199,8 @@ class AudioLoop:
         except ValueError as ve: # Captura erro se enforce_detection=True e nenhum rosto for encontrado
             print(f"[DeepFace] Erro (ValueError) ao identificar: {ve}")
             result_message = "Não detectei um rosto claro para identificar."
-        except ImportError:
-             # Deepface.find pode precisar de pandas, que não foi importado explicitamente
-             print("[DeepFace] Erro: A biblioteca 'pandas' pode ser necessária para DeepFace.find. Instale com 'pip install pandas'.")
-             result_message = "Erro interno ao processar identificação (dependência faltando)."
+        # except ImportError: # Já tratado no início da função
+        #      pass
         except Exception as e:
             print(f"[DeepFace] Erro inesperado ao identificar: {e}")
             traceback.print_exc()
@@ -1642,14 +1723,10 @@ class AudioLoop:
                                                 result_message = "Erro interno: nome não disponível para salvar rosto neste ponto."
                                                 print(f"ERRO LÓGICO: Tentativa de chamar _handle_save_known_face sem nome.")
                                         elif function_name == "identify_person_in_front":
-                                            # Importa pandas aqui se necessário para DeepFace.find
-                                            try:
-                                                global pd
-                                                import pandas as pd
-                                            except ImportError:
-                                                 print("AVISO: Biblioteca 'pandas' não encontrada. Necessária para DeepFace.find.")
+                                            # Verifica se pandas está disponível
+                                            if pd is None:
                                                  result_message = "Erro interno: dependência 'pandas' faltando para identificação."
-                                            if 'pd' in globals():
+                                            else:
                                                 result_message = await asyncio.to_thread(self._handle_identify_person_in_front)
 
                                         elif function_name == "find_object_and_estimate_distance":
@@ -1882,6 +1959,12 @@ class AudioLoop:
 
 
                 # --- Tenta conectar ---
+                # Verifica se o cliente Gemini foi inicializado com sucesso
+                if client is None:
+                    print("ERRO: Cliente Gemini não inicializado. Não é possível conectar.")
+                    self.stop_event.set()
+                    break
+
                 print(f"Tentando conectar ao Gemini (Tentativa {attempt+1})...")
                 async with client.aio.live.connect(model=MODEL, config=CONFIG) as session:
                     self.session = session
@@ -1963,7 +2046,7 @@ class AudioLoop:
                     "RST_STREAM", "UNAVAILABLE", "DEADLINE_EXCEEDED",
                     "LIVESESSION CLOSED", "LIVESESSION NOT CONNECTED",
                     "CONNECTIONCLOSEDERROR", "GOAWAY", "INTERNALERROR",
-                    "FAILED TO ESTABLISH CONNECTION"
+                    "FAILED TO ESTABLISH CONNECTION", "AUTHENTICATION" # Adiciona erro de autenticação
                 ])
 
                 if is_connection_error:
@@ -2067,9 +2150,14 @@ if __name__ == "__main__":
          print("O programa não pode funcionar sem áudio. Encerrando.")
          exit(1) # Sai se PyAudio falhou
 
+    # Verifica se o cliente Gemini foi inicializado
+    if client is None:
+        print("ERRO CRÍTICO: Cliente Gemini não pôde ser inicializado (verifique API Key/conexão). Encerrando.")
+        exit(1)
+
     # Verifica se o arquivo de prompt foi carregado (system_instruction_text deve existir)
     if 'system_instruction_text' not in globals() or not system_instruction_text or system_instruction_text == "Você é um assistente prestativo.":
-         print("ERRO CRÍTICO: Falha ao carregar a instrução do sistema do arquivo.")
+         print("AVISO: Falha ao carregar a instrução do sistema do arquivo ou arquivo não encontrado. Usando prompt padrão.")
          # Decide se quer continuar com o prompt padrão ou sair
          # exit(1) # Descomente para sair se o prompt for essencial
 
@@ -2099,11 +2187,11 @@ if __name__ == "__main__":
         # Este bloco sempre será executado, mesmo após interrupção ou erro
         print("Bloco __main__ finalizado.")
         # Verifica se PyAudio ainda precisa ser terminado (caso run() não tenha chegado ao fim)
-        if pya and main_loop and not main_loop.stop_event.is_set(): # Se run não terminou normalmente
-             try:
-                 print("Tentando terminar PyAudio no finally do main...")
-                 pya.terminate()
-             except Exception as e_pya_final:
-                 print(f"Erro ao terminar PyAudio no finally do main: {e_pya_final}")
+        # if pya and main_loop and not main_loop.stop_event.is_set(): # Se run não terminou normalmente
+        #      try:
+        #          print("Tentando terminar PyAudio no finally do main...")
+        #          pya.terminate()
+        #      except Exception as e_pya_final:
+        #          print(f"Erro ao terminar PyAudio no finally do main: {e_pya_final}")
 
         print("Programa completamente finalizado.")
