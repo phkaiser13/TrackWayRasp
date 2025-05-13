@@ -1,13 +1,22 @@
 
+# 1. Importações e Dependências
+# Bibliotecas Padrão (stdlib)
 import os
 import asyncio
 import base64
 import io
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 import traceback
 import time
 import argparse
 import threading
-import logging # <--- Adicionado para logging mais robusto (opcional, mas recomendado)
 from typing import Dict, Any, Optional, List, Tuple
 
 # Bibliotecas de Terceiros
@@ -15,6 +24,14 @@ import cv2
 import pyaudio
 from PIL import Image
 import mss
+# Tenta importar pandas, necessário para DeepFace.find
+try:
+    import pandas as pd
+except ImportError:
+    logger.info("AVISO: Biblioteca 'pandas' não encontrada. 'identify_person_in_front' pode não funcionar.")
+    logger.info("Instale com: pip install pandas")
+    pd = None # Define como None se não encontrado
+
 from google import genai
 from google.genai import types
 from google.genai import errors # Importado para referência
@@ -26,10 +43,13 @@ import torch
 import torchvision
 import timm
 
+
+
+
 # --- Configuração de Logging (Opcional, mas melhor que prints) ---
- logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
- logger = logging.getLogger(__name__)
- #Descomente as linhas acima e substitua prints por logger.info/logger.warning/logger.error para um logging mais estruturado.
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+# logger = logging.getLogger(__name__)
+# Descomente as linhas acima e substitua prints por logger.info/logger.warning/logger.errorr para um logging mais estruturado.
 # Por enquanto, manteremos os prints conforme solicitado.
 
 # --- Constantes ---
@@ -211,22 +231,41 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     try:
         from dotenv import load_dotenv
-        load_dotenv()
-        API_KEY = os.environ.get("GEMINI_API_KEY")
+        # Especifica o caminho para o .env se ele não estiver na raiz do projeto
+        dotenv_path = os.path.join(BaseDir, '.env') # Ajuste se necessário
+        if os.path.exists(dotenv_path):
+            load_dotenv(dotenv_path=dotenv_path)
+            API_KEY = os.environ.get("GEMINI_API_KEY")
+            logger.info("Chave API carregada de: {dotenv_path}")
+        else:
+             logger.info("Arquivo .env não encontrado em: {dotenv_path}")
     except ImportError:
+        logger.info("Biblioteca python-dotenv não instalada. Não é possível carregar .env.")
         pass
+    except Exception as e_env:
+        logger.error(" ao carregar .env: {e_env}")
+
 
 if not API_KEY:
-    print("AVISO: Chave da API Gemini não encontrada nas variáveis de ambiente ou .env. Usando chave placeholder.")
-    API_KEY = "SUA_API_KEY_AQUI" # Substitua se necessário, mas prefira variáveis de ambiente
+    logger.info("AVISO: Chave da API Gemini não encontrada nas variáveis de ambiente ou .env.")
+    # Removido o fallback para chave placeholder para maior segurança.
+    # O código abaixo com a chave hardcoded será usado, mas NÃO É RECOMENDADO.
+    # API_KEY = "SUA_API_KEY_AQUI" # Substitua se necessário, mas prefira variáveis de ambiente
 
 # ATENÇÃO: A chave hardcoded abaixo ainda está presente. Remova-a ou substitua por API_KEY.
 # É ALTAMENTE RECOMENDADO usar a variável API_KEY carregada acima.
-client = genai.Client(
-    api_key="AIzaSyCOZU2M9mrAsx8aC4tYptfoSEwaJ3IuDZM", # <-- SUBSTITUA por API_KEY
-    # api_key=API_KEY, # <-- Use esta linha em vez da acima
-    http_options=types.HttpOptions(api_version='v1alpha')
-)
+try:
+    client = genai.Client(
+        api_key="AIzaSyCOZU2M9mrAsx8aC4tYptfoSEwaJ3IuDZM", # <-- SUBSTITUA por API_KEY ou remova se API_KEY for None
+        # api_key=API_KEY, # <-- Use esta linha em vez da acima se API_KEY for carregada
+        http_options=types.HttpOptions(api_version='v1alpha')
+    )
+    logger.info("Cliente Gemini inicializado.")
+except Exception as e_client:
+    logger.error(" CRÍTICO ao inicializar cliente Gemini: {e_client}")
+    logger.info("Verifique a API Key e a conexão.")
+    client = None # Define como None para indicar falha
+    # exit(1) # Descomente para sair se o cliente for essencial
 
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
@@ -275,25 +314,23 @@ tools = [
 ]
 
 # --- Carregar Instrução do Sistema do Arquivo ---
+system_instruction_text = "Você é um assistente prestativo." # Prompt padrão mínimo
 try:
-    with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
-        system_instruction_text = f.read()
-    print(f"Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
-except FileNotFoundError:
-    print(f"ERRO CRÍTICO: Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'.")
-    print("Usando um prompt padrão mínimo.")
-    # Fallback para um prompt mínimo se o arquivo não for encontrado
-    system_instruction_text = "Você é um assistente prestativo."
+    if not os.path.exists(SYSTEM_INSTRUCTION_PATH):
+         logger.warning(": Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'. Usando prompt padrão.")
+    else:
+        with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
+            system_instruction_text = f.read()
+        logger.info("Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
 except Exception as e:
-    print(f"ERRO CRÍTICO ao ler o arquivo de instrução do sistema: {e}")
-    print("Usando um prompt padrão mínimo.")
-    system_instruction_text = "Você é um assistente prestativo."
+    logger.error(" ao ler o arquivo de instrução do sistema: {e}")
+    logger.info("Usando um prompt padrão mínimo.")
     traceback.print_exc()
 
 
 # --- Configuração da Sessão LiveConnect Gemini ---
 CONFIG = types.LiveConnectConfig(
-    temperature=0.7,
+    temperature=0,
     response_modalities=["audio"],
     speech_config=types.SpeechConfig(
         language_code="pt-BR",
@@ -312,7 +349,7 @@ CONFIG = types.LiveConnectConfig(
 try:
     pya = pyaudio.PyAudio()
 except Exception as e:
-    print(f"Erro ao inicializar PyAudio: {e}. O áudio não funcionará.")
+    logger.error(" ao inicializar PyAudio: {e}. O áudio não funcionará.")
     pya = None
 
 # --- Classe Principal do Assistente ---
@@ -321,8 +358,6 @@ class AudioLoop:
     Gerencia o loop principal do assistente multimodal.
     """
     def __init__(self, video_mode: str = DEFAULT_MODE, show_preview: bool = False):
-        # (Inicialização __init__ inalterada - omitida para brevidade)
-        # ... (mesmo código de __init__ anterior) ...
         self.video_mode = video_mode
         self.show_preview = show_preview if video_mode == "camera" else False
         self.audio_in_queue: Optional[asyncio.Queue] = None
@@ -345,76 +380,122 @@ class AudioLoop:
         if self.video_mode == "camera":
             try:
                 self.yolo_model = YOLO(YOLO_MODEL_PATH)
-                print(f"Modelo YOLO '{YOLO_MODEL_PATH}' carregado.")
+                logger.info("Modelo YOLO '{YOLO_MODEL_PATH}' carregado.")
+            except FileNotFoundError:
+                 logger.error(": Modelo YOLO não encontrado em '{YOLO_MODEL_PATH}'. YOLO desabilitado.")
+                 self.yolo_model = None
             except Exception as e:
-                print(f"Erro ao carregar o modelo YOLO: {e}. YOLO desabilitado.")
+                logger.error(" ao carregar o modelo YOLO: {e}. YOLO desabilitado.")
+                traceback.print_exc()
                 self.yolo_model = None
 
         if not os.path.exists(DB_PATH):
             try:
                 os.makedirs(DB_PATH)
-                print(f"Diretório DeepFace DB criado em: {DB_PATH}")
+                logger.info("Diretório DeepFace DB criado em: {DB_PATH}")
             except Exception as e:
-                print(f"Erro ao criar diretório {DB_PATH}: {e}")
+                logger.error(" ao criar diretório {DB_PATH}: {e}")
 
         try:
-            print("Pré-carregando modelos DeepFace...")
-            dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8) # uint8 é importante
-            DeepFace.analyze(img_path=dummy_frame, actions=['emotion'], enforce_detection=False, silent=True)
-            print("Modelos DeepFace pré-carregados.")
+            logger.info("Pré-carregando modelos DeepFace...")
+            # Cria um frame dummy para forçar o carregamento
+            dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+            # Executa uma ação leve (emoção) sem exigir detecção
+            DeepFace.analyze(img_path=dummy_frame, actions=['emotion'], enforce_detection=False)
+            logger.info("Modelos DeepFace pré-carregados.")
         except Exception as e:
-            print(f"Aviso: Erro ao pré-carregar modelos DeepFace: {e}.")
+            logger.warning(": Erro ao pré-carregar modelos DeepFace: {e}.")
+            # traceback.print_exc() # Descomente se precisar depurar o pré-carregamento
 
         self.midas_model = None
         self.midas_transform = None
         self.midas_device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
-            print(f"Carregando modelo MiDaS ({MIDAS_MODEL_TYPE}) para {self.midas_device}...")
+            logger.info("Carregando modelo MiDaS ({MIDAS_MODEL_TYPE}) para {self.midas_device}...")
+            # Carrega o modelo MiDaS do Torch Hub
             self.midas_model = torch.hub.load("intel-isl/MiDaS", MIDAS_MODEL_TYPE)
+            # Carrega as transformações correspondentes
             midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
             if MIDAS_MODEL_TYPE == "MiDaS_small":
                  self.midas_transform = midas_transforms.small_transform
             else:
+                 # Assume DPT transform para outros modelos (pode precisar ajustar)
                  self.midas_transform = midas_transforms.dpt_transform
+            # Move o modelo para o dispositivo (GPU ou CPU)
             self.midas_model.to(self.midas_device)
+            # Define o modelo para modo de avaliação (desativa dropout, etc.)
             self.midas_model.eval()
-            print("Modelo MiDaS carregado.")
+            logger.info("Modelo MiDaS carregado.")
         except Exception as e:
-            print(f"Erro ao carregar modelo MiDaS: {e}. Estimativa de profundidade desabilitada.")
+            logger.error(" ao carregar modelo MiDaS: {e}. Estimativa de profundidade desabilitada.")
+            # traceback.print_exc() # Descomente para depurar o carregamento do MiDaS
             self.midas_model = None
             self.midas_transform = None
 
 
     async def send_text(self):
-        # (Função send_text inalterada - omitida para brevidade)
-        print("Pronto para receber comandos de texto. Digite 'q' para sair.")
+        """Lê input de texto do usuário, trata comandos de debug e envia ao Gemini."""
+        logger.info("Pronto para receber comandos de texto. Digite 'q' para sair, 'p' para salvar rosto (debug).")
         while not self.stop_event.is_set():
             try:
+                # Lê input do usuário em uma thread separada para não bloquear asyncio
                 text = await asyncio.to_thread(input, "message > ")
+
+                # --- Tratamento de Comandos Locais/Debug ---
                 if text.lower() == "q":
                     self.stop_event.set()
-                    print("Sinal de parada ('q') recebido. Encerrando...")
-                    break
+                    logger.info("Sinal de parada ('q') recebido. Encerrando...")
+                    break # Sai do loop while
 
+                # --- ADIÇÃO: Comando de Debug 'p' ---
+                elif text.lower() == "p":
+                    logger.info("[DEBUG] Comando 'p' recebido. Tentando salvar rosto como 'pedro'...")
+                    if self.video_mode == "camera":
+                        # Chama a função de salvar rosto diretamente em outra thread
+                        try:
+                            # Bloqueia o 'pensamento' para evitar conflitos? Opcional.
+                            # self.thinking_event.set()
+                            logger.info("  [DEBUG] Chamando _handle_save_known_face('pedro')...")
+                            result = await asyncio.to_thread(self._handle_save_known_face, "pedro")
+                            logger.info("  [DEBUG] Resultado do salvamento direto: {result}")
+                        except Exception as e_debug_save:
+                            logger.info("  [DEBUG] Erro ao tentar salvar rosto diretamente: {e_debug_save}")
+                            traceback.print_exc()
+                        # finally:
+                            # self.thinking_event.clear()
+                    else:
+                        logger.info("  [DEBUG] Salvar rosto só funciona no modo câmera.")
+                    continue # Pula o envio para Gemini e espera o próximo input
+
+                # --- Envio Normal para Gemini ---
+                # Verifica se a sessão existe e está ativa antes de enviar
                 if self.session:
-                    print(f"Enviando texto: '{text}'")
+                    logger.info("Enviando texto para Gemini: '{text}'")
+                    # Envia o texto para o Gemini, marcando o fim do turno do usuário
+                    # Envia "." se o texto estiver vazio para manter a sessão ativa
                     await self.session.send(input=text or ".", end_of_turn=True)
                 else:
+                    # Avisa se a sessão não estiver ativa
                     if not self.stop_event.is_set():
-                        print("Sessão Gemini não está ativa. Não é possível enviar mensagem.")
-                        await asyncio.sleep(0.5)
+                        logger.info("Sessão Gemini não está ativa. Não é possível enviar mensagem.")
+                        await asyncio.sleep(0.5) # Evita spamming da mensagem
+
             except asyncio.CancelledError:
-                print("send_text cancelado.")
+                logger.info("send_text cancelado.")
                 break
             except Exception as e:
-                print(f"Erro em send_text: {e}")
+                logger.error(" em send_text: {e}")
                 # Adiciona traceback para depuração em caso de erro inesperado
                 # traceback.print_exc()
-                if "LiveSession closed" in str(e) or "LiveSession not connected" in str(e):
-                    print("Erro em send_text indica sessão fechada. Sinalizando parada.")
+                # Verifica se o erro indica sessão fechada para parar
+                error_str_upper = str(e).upper()
+                if "LIVESESSION CLOSED" in error_str_upper or "LIVESESSION NOT CONNECTED" in error_str_upper:
+                    logger.info("Erro em send_text indica sessão fechada. Sinalizando parada.")
                     self.stop_event.set()
-                break
-        print("send_text finalizado.")
+                # Considerar parar em outros erros graves também?
+                # else: self.stop_event.set()
+                break # Sai do loop em caso de erro
+        logger.info("send_text finalizado.")
 
 
     def _get_frame(self, cap: cv2.VideoCapture) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -454,7 +535,7 @@ class AudioLoop:
                         if is_dangerous and conf >= YOLO_CONFIDENCE_THRESHOLD:
                             yolo_alerts.append(class_name_yolo)
             except Exception as e:
-                print(f"Erro na inferência YOLO: {e}")
+                logger.error(" na inferência YOLO: {e}")
                 # traceback.print_exc() # Descomente para depuração detalhada do YOLO
                 current_yolo_results = None
         elif self.show_preview and ret:
@@ -476,17 +557,17 @@ class AudioLoop:
                 self.preview_window_active = True
             except cv2.error as e:
                 if "DISPLAY" in str(e).upper() or "GTK" in str(e).upper() or "QT" in str(e).upper() or "COULD NOT CONNECT TO DISPLAY" in str(e).upper() or "plugin \"xcb\"" in str(e):
-                    print("--------------------------------------------------------------------")
-                    print("AVISO: Não foi possível mostrar a janela de preview da câmera.")
-                    print("Desabilitando feedback visual para esta sessão.")
-                    print("--------------------------------------------------------------------")
+                    logger.info("--------------------------------------------------------------------")
+                    logger.info("AVISO: Não foi possível mostrar a janela de preview da câmera.")
+                    logger.info("Desabilitando feedback visual para esta sessão.")
+                    logger.info("--------------------------------------------------------------------")
                     self.show_preview = False
                     self.preview_window_active = False
                 else:
-                    print(f"Erro inesperado no OpenCV ao tentar mostrar preview: {e}")
+                    logger.error(" inesperado no OpenCV ao tentar mostrar preview: {e}")
                     # traceback.print_exc() # Descomente para depuração detalhada do OpenCV
             except Exception as e_gen:
-                print(f"Erro geral ao tentar mostrar preview: {e_gen}")
+                logger.error(" geral ao tentar mostrar preview: {e_gen}")
                 # traceback.print_exc() # Descomente para depuração detalhada
                 self.show_preview = False
                 self.preview_window_active = False
@@ -497,16 +578,16 @@ class AudioLoop:
                 if 'frame_rgb' not in locals() or frame_rgb is None: # Adicionado 'or frame_rgb is None'
                      frame_rgb = cv2.cvtColor(latest_frame_copy, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame_rgb)
-                img.thumbnail([1024, 1024])
+                img.thumbnail([1024, 1024]) # Redimensiona mantendo proporção
                 image_io = io.BytesIO()
-                img.save(image_io, format="jpeg")
+                img.save(image_io, format="jpeg", quality=85) # Ajusta qualidade JPEG
                 image_io.seek(0)
                 image_part = {
                     "mime_type": "image/jpeg",
                     "data": base64.b64encode(image_io.read()).decode('utf-8')
                 }
             except Exception as e:
-                print(f"Erro na conversão do frame para JPEG: {e}")
+                logger.error(" na conversão do frame para JPEG: {e}")
                 # traceback.print_exc() # Descomente para depuração detalhada
 
         return image_part, list(set(yolo_alerts))
@@ -516,24 +597,24 @@ class AudioLoop:
         # (Função get_frames inalterada, exceto por traceback em erro crítico - omitida para brevidade)
         cap = None
         try:
-            print("Iniciando captura da câmera...")
+            logger.info("Iniciando captura da câmera...")
             cap = await asyncio.to_thread(cv2.VideoCapture, 0)
             target_fps = 1
             # Tenta definir FPS, mas não é garantido que funcione em todas as câmeras/drivers
             cap.set(cv2.CAP_PROP_FPS, target_fps)
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
-            print(f"FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
+            logger.info("FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
 
             if actual_fps > 0 and actual_fps < target_fps * 5: # Usa FPS real se razoável
                 sleep_interval = 1 / actual_fps
             else:
                 sleep_interval = 1 / target_fps # Usa FPS alvo como fallback
             sleep_interval = max(0.1, min(sleep_interval, 1.0)) # Limita entre 0.1s e 1.0s
-            print(f"Intervalo de captura de frame: {sleep_interval:.2f}s")
+            logger.info("Intervalo de captura de frame: {sleep_interval:.2f}s")
 
 
             if not cap.isOpened():
-                print("Erro: Não foi possível abrir a câmera.")
+                logger.info("Erro: Não foi possível abrir a câmera.")
                 with self.frame_lock:
                     self.latest_bgr_frame = None
                     self.latest_yolo_results = None
@@ -542,7 +623,7 @@ class AudioLoop:
 
             while not self.stop_event.is_set():
                 if not cap.isOpened():
-                    print("Câmera desconectada ou fechada inesperadamente.")
+                    logger.info("Câmera desconectada ou fechada inesperadamente.")
                     self.stop_event.set()
                     break
 
@@ -554,11 +635,11 @@ class AudioLoop:
 
                 if not frame_was_read:
                      if not cap.isOpened():
-                         print("Leitura do frame falhou e câmera fechada. Encerrando get_frames.")
+                         logger.info("Leitura do frame falhou e câmera fechada. Encerrando get_frames.")
                          self.stop_event.set()
                          break
                      else:
-                         print("Aviso: Falha temporária na leitura do frame.")
+                         logger.info("Aviso: Falha temporária na leitura do frame.")
                          await asyncio.sleep(0.5) # Espera um pouco antes de tentar de novo
                          continue
 
@@ -569,13 +650,13 @@ class AudioLoop:
                             # Descarta o mais antigo para dar espaço ao novo
                             discarded = await self.out_queue.get()
                             self.out_queue.task_done() # Marca o descartado como concluído
-                            # print("Aviso: Fila de saída cheia, descartando frame antigo.") # Log opcional
+                            # logger.info("Aviso: Fila de saída cheia, descartando frame antigo.") # Log opcional
                         self.out_queue.put_nowait(image_part)
                     except asyncio.QueueFull:
                          # Isso não deveria acontecer se a lógica acima estiver correta, mas por segurança
-                         pass # print("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame.") # Log opcional
+                         pass # logger.info("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame.") # Log opcional
                     except Exception as q_e:
-                         print(f"Erro inesperado ao manipular out_queue em get_frames: {q_e}")
+                         logger.error(" inesperado ao manipular out_queue em get_frames: {q_e}")
 
 
                 # Envia alertas YOLO urgentes diretamente
@@ -585,11 +666,11 @@ class AudioLoop:
                             alert_msg = f"Usuário, CUIDADO! {alert_class_name.upper()} detectado!"
                             # Não precisa verificar out_queue aqui, pois envia direto
                             await self.session.send(input=alert_msg, end_of_turn=True)
-                            print(f"ALERTA URGENTE ENVIADO: {alert_msg}")
+                            logger.info("ALERTA URGENTE ENVIADO: {alert_msg}")
                         except Exception as e:
-                            print(f"Erro ao enviar alerta urgente: {e}")
+                            logger.error(" ao enviar alerta urgente: {e}")
                             if "LiveSession closed" in str(e) or "LiveSession not connected" in str(e):
-                                print("Erro ao enviar alerta indica sessão fechada. Sinalizando parada.")
+                                logger.info("Erro ao enviar alerta indica sessão fechada. Sinalizando parada.")
                                 self.stop_event.set()
                                 break # Sai do loop de alertas se a sessão fechar
 
@@ -597,16 +678,16 @@ class AudioLoop:
                 await asyncio.sleep(sleep_interval)
 
         except asyncio.CancelledError:
-            print("get_frames cancelado.")
+            logger.info("get_frames cancelado.")
         except Exception as e:
-            print(f"Erro crítico em get_frames: {e}")
+            logger.error(" crítico em get_frames: {e}")
             traceback.print_exc() # Imprime traceback para erros críticos
             self.stop_event.set()
         finally:
-            print("Finalizando get_frames...")
+            logger.info("Finalizando get_frames...")
             if cap and cap.isOpened():
                 cap.release()
-                print("Câmera liberada.")
+                logger.info("Câmera liberada.")
             # Garante que o estado do frame seja limpo
             with self.frame_lock:
                 self.latest_bgr_frame = None
@@ -616,16 +697,16 @@ class AudioLoop:
                 try:
                     # Tenta fechar a janela específica primeiro
                     cv2.destroyWindow("Trackie YOLO Preview")
-                    print("Janela de preview 'Trackie YOLO Preview' fechada.")
+                    logger.info("Janela de preview 'Trackie YOLO Preview' fechada.")
                 except Exception:
                     try:
                         # Se falhar, tenta fechar todas as janelas OpenCV
                         cv2.destroyAllWindows()
-                        print("Todas as janelas OpenCV fechadas.")
+                        logger.info("Todas as janelas OpenCV fechadas.")
                     except Exception as e_cv_destroy_all:
-                        print(f"Aviso: erro ao tentar fechar janelas de preview no finally: {e_cv_destroy_all}")
+                        logger.warning(": erro ao tentar fechar janelas de preview no finally: {e_cv_destroy_all}")
             self.preview_window_active = False # Garante que o estado está correto
-            print("get_frames concluído.")
+            logger.info("get_frames concluído.")
 
 
     def _get_screen(self) -> Optional[Dict[str, Any]]:
@@ -641,7 +722,7 @@ class AudioLoop:
                  if len(monitors) > 1: # Se houver mais de um, pega o segundo (índice 1), que geralmente é o primário real
                      monitor = monitors[1]
             else: # Nenhum monitor encontrado
-                print("Erro: Nenhum monitor detectado por mss.")
+                logger.info("Erro: Nenhum monitor detectado por mss.")
                 return None
 
             # Captura a imagem do monitor selecionado
@@ -663,21 +744,21 @@ class AudioLoop:
                 "data": base64.b64encode(image_io.read()).decode('utf-8')
             }
         except Exception as e:
-            print(f"Erro ao capturar tela: {e}")
+            logger.error(" ao capturar tela: {e}")
             # traceback.print_exc() # Descomente para depuração detalhada do mss
             return None
 
 
     async def get_screen(self):
         # (Função get_screen inalterada, exceto por traceback em erro crítico - omitida para brevidade)
-        print("Iniciando captura de tela...")
+        logger.info("Iniciando captura de tela...")
         try:
             while not self.stop_event.is_set():
                 # Executa a captura síncrona em outra thread
                 frame_data = await asyncio.to_thread(self._get_screen)
 
                 if frame_data is None:
-                    print("Falha ao capturar frame da tela.")
+                    logger.info("Falha ao capturar frame da tela.")
                     await asyncio.sleep(1.0) # Espera antes de tentar novamente
                     continue
 
@@ -688,28 +769,28 @@ class AudioLoop:
                              # Descarta o mais antigo
                              discarded = await self.out_queue.get()
                              self.out_queue.task_done()
-                             # print("Aviso: Fila de saída cheia, descartando frame de tela antigo.") # Log opcional
+                             # logger.info("Aviso: Fila de saída cheia, descartando frame de tela antigo.") # Log opcional
                          self.out_queue.put_nowait(frame_data)
                     except asyncio.QueueFull:
-                         pass # print("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame de tela.") # Log opcional
+                         pass # logger.info("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame de tela.") # Log opcional
                     except Exception as q_e:
-                         print(f"Erro inesperado ao manipular out_queue em get_screen: {q_e}")
+                         logger.error(" inesperado ao manipular out_queue em get_screen: {q_e}")
 
                 # Espera 1 segundo entre capturas de tela
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
-            print("get_screen cancelado.")
+            logger.info("get_screen cancelado.")
         except Exception as e:
-            print(f"Erro crítico em get_screen: {e}")
+            logger.error(" crítico em get_screen: {e}")
             traceback.print_exc() # Imprime traceback para erros críticos
             self.stop_event.set()
         finally:
-            print("get_screen finalizado.")
+            logger.info("get_screen finalizado.")
 
 
     async def send_realtime(self):
         # (Função send_realtime inalterada, exceto por traceback em erro crítico - omitida para brevidade)
-        print("Send_realtime pronto para enviar dados...")
+        logger.info("Send_realtime pronto para enviar dados...")
         try:
             while not self.stop_event.is_set():
                 # Pausa se o Gemini estiver processando uma função (thinking_event)
@@ -733,14 +814,14 @@ class AudioLoop:
                     continue
                 except Exception as q_get_e:
                     # Erro inesperado ao obter da fila
-                    print(f"Erro ao obter da out_queue em send_realtime: {q_get_e}")
+                    logger.error(" ao obter da out_queue em send_realtime: {q_get_e}")
                     await asyncio.sleep(0.1)
                     continue
 
 
                 # Verifica se a sessão Gemini está ativa
                 if not self.session:
-                    # print("Sessão Gemini não está ativa (send_realtime). Descartando mensagem.") # Log opcional
+                    # logger.info("Sessão Gemini não está ativa (send_realtime). Descartando mensagem.") # Log opcional
                     if self.out_queue: self.out_queue.task_done() # Marca a tarefa como concluída mesmo descartando
                     if not self.stop_event.is_set():
                         await asyncio.sleep(0.5)
@@ -751,16 +832,16 @@ class AudioLoop:
                     if isinstance(msg, dict) and "data" in msg and "mime_type" in msg : # Mensagem multimodal (imagem/áudio)
                         await self.session.send(input=msg)
                     elif isinstance(msg, str): # Mensagem de texto (raro neste fluxo, usado para alertas)
-                        print(f"Enviando texto via send_realtime (raro): {msg}")
+                        logger.info("Enviando texto via send_realtime (raro): {msg}")
                         await self.session.send(input=msg, end_of_turn=False) # end_of_turn=False para não interromper fluxo normal
                     else:
-                        print(f"Mensagem desconhecida em send_realtime: {type(msg)}")
+                        logger.info("Mensagem desconhecida em send_realtime: {type(msg)}")
 
                     # Marca a tarefa como concluída na fila após envio bem-sucedido
                     if self.out_queue: self.out_queue.task_done()
 
                 except Exception as e_send:
-                    print(f"Erro ao enviar para Gemini em send_realtime: {e_send}")
+                    logger.error(" ao enviar para Gemini em send_realtime: {e_send}")
                     # Garante task_done mesmo em erro para não bloquear a fila
                     if self.out_queue: self.out_queue.task_done()
                     # Verifica se o erro indica sessão fechada/perdida
@@ -770,7 +851,7 @@ class AudioLoop:
                        "DEADLINE EXCEEDED" in error_str_upper or \
                        "RST_STREAM" in error_str_upper or \
                        "UNAVAILABLE" in error_str_upper:
-                        print("Erro de envio indica sessão Gemini fechada/perdida. Sinalizando parada.")
+                        logger.info("Erro de envio indica sessão Gemini fechada/perdida. Sinalizando parada.")
                         self.stop_event.set()
                         break # Sai do loop while
                     else:
@@ -779,33 +860,33 @@ class AudioLoop:
                         await asyncio.sleep(0.5) # Pausa antes de tentar processar próximo item
 
         except asyncio.CancelledError:
-            print("send_realtime cancelado.")
+            logger.info("send_realtime cancelado.")
         except Exception as e:
-            print(f"Erro fatal em send_realtime: {e}")
+            logger.error(" fatal em send_realtime: {e}")
             traceback.print_exc() # Imprime traceback para erros fatais
             self.stop_event.set()
         finally:
-            print("send_realtime finalizado.")
+            logger.info("send_realtime finalizado.")
 
 
     async def listen_audio(self):
         # (Função listen_audio inalterada, exceto por traceback em erro crítico - omitida para brevidade)
         if not pya:
-            print("PyAudio não inicializado. Tarefa listen_audio não pode iniciar.")
+            logger.info("PyAudio não inicializado. Tarefa listen_audio não pode iniciar.")
             return
 
         audio_stream = None
         try:
-            print("Configurando stream de áudio de entrada...")
+            logger.info("Configurando stream de áudio de entrada...")
             mic_info = pya.get_default_input_device_info()
-            print(f"Usando microfone: {mic_info['name']}")
+            logger.info("Usando microfone: {mic_info['name']}")
             audio_stream = await asyncio.to_thread(
                 pya.open,
                 format=FORMAT, channels=CHANNELS, rate=SEND_SAMPLE_RATE,
                 input=True, input_device_index=mic_info["index"],
                 frames_per_buffer=CHUNK_SIZE
             )
-            print("Escutando áudio do microfone...")
+            logger.info("Escutando áudio do microfone...")
 
             while not self.stop_event.is_set():
                 # Pausa se o Gemini estiver processando
@@ -815,7 +896,7 @@ class AudioLoop:
 
                 # Verifica se o stream ainda está ativo
                 if not audio_stream or not audio_stream.is_active():
-                     print("Stream de áudio de entrada não está ativo. Encerrando listen_audio.")
+                     logger.info("Stream de áudio de entrada não está ativo. Encerrando listen_audio.")
                      self.stop_event.set()
                      break
 
@@ -832,75 +913,75 @@ class AudioLoop:
                                  discarded = await self.out_queue.get()
                                  self.out_queue.task_done()
                                  # pass # Ou simplesmente não envia se estiver cheio
-                                 # print("Aviso: Fila de saída cheia, áudio pode ser atrasado/descartado.")
+                                 # logger.info("Aviso: Fila de saída cheia, áudio pode ser atrasado/descartado.")
                              self.out_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
                          except asyncio.QueueFull:
-                             pass # print("Aviso: Fila de saída cheia ao tentar enfileirar áudio.")
+                             pass # logger.info("Aviso: Fila de saída cheia ao tentar enfileirar áudio.")
                          except Exception as q_e:
-                              print(f"Erro inesperado ao manipular out_queue em listen_audio: {q_e}")
+                              logger.error(" inesperado ao manipular out_queue em listen_audio: {q_e}")
 
                 except OSError as e_os:
                     # Erros comuns de stream fechado ou overflow
                     if e_os.errno == -9988 or "Stream closed" in str(e_os) or "Input overflowed" in str(e_os):
-                        print(f"Stream de áudio fechado ou com overflow (OSError: {e_os}). Encerrando listen_audio.")
+                        logger.info("Stream de áudio fechado ou com overflow (OSError: {e_os}). Encerrando listen_audio.")
                         self.stop_event.set()
                         break
                     else:
                         # Outros erros de OS podem ser mais sérios
-                        print(f"Erro de OS ao ler do stream de áudio: {e_os}")
+                        logger.error(" de OS ao ler do stream de áudio: {e_os}")
                         traceback.print_exc()
                         self.stop_event.set()
                         break
                 except Exception as e_read:
                     # Erro genérico durante a leitura
-                    print(f"Erro durante a leitura do áudio em listen_audio: {e_read}")
+                    logger.error(" durante a leitura do áudio em listen_audio: {e_read}")
                     traceback.print_exc()
                     self.stop_event.set() # Para a tarefa em caso de erro de leitura
                     break
         except asyncio.CancelledError:
-            print("listen_audio cancelado.")
+            logger.info("listen_audio cancelado.")
         except Exception as e:
             # Erro crítico na configuração ou loop principal
-            print(f"Erro crítico em listen_audio: {e}")
+            logger.error(" crítico em listen_audio: {e}")
             traceback.print_exc()
             self.stop_event.set()
         finally:
-            print("Finalizando listen_audio...")
+            logger.info("Finalizando listen_audio...")
             # Garante que o stream seja fechado
             if audio_stream:
                 try:
                     if audio_stream.is_active():
                         audio_stream.stop_stream()
                     audio_stream.close()
-                    print("Stream de áudio de entrada fechado.")
+                    logger.info("Stream de áudio de entrada fechado.")
                 except Exception as e_close_stream:
-                    print(f"Erro ao fechar stream de áudio de entrada: {e_close_stream}")
-            print("listen_audio concluído.")
+                    logger.error(" ao fechar stream de áudio de entrada: {e_close_stream}")
+            logger.info("listen_audio concluído.")
 
 
     def _handle_save_known_face(self, person_name: str) -> str:
         """Processa a chamada de função para salvar um rosto."""
         # --- LOGGING INÍCIO ---
-        print(f"[LOG] Executando: _handle_save_known_face")
-        print(f"[LOG]   - Argumentos: person_name='{person_name}'")
+        logger.info("[LOG] Executando: _handle_save_known_face")
+        logger.info("[LOG]   - Argumentos: person_name='{person_name}'")
         # --- FIM LOGGING ---
 
         start_time = time.time()
         result_message = "" # Inicializa a mensagem de resultado
 
-        print(f"[DeepFace] Iniciando salvamento para: {person_name}")
+        logger.info("[DeepFace] Iniciando salvamento para: {person_name}")
         frame_to_process = None
         with self.frame_lock:
             if self.latest_bgr_frame is not None:
                 frame_to_process = self.latest_bgr_frame.copy()
 
         if frame_to_process is None:
-            print("[DeepFace] Erro: Nenhum frame disponível para salvar.")
+            logger.info("[DeepFace] Erro: Nenhum frame disponível para salvar.")
             result_message = "Não foi possível capturar a imagem para salvar o rosto."
             # --- LOGGING FIM ---
-            print(f"[LOG] Finalizado: _handle_save_known_face (Erro: Sem frame)")
-            print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            print(f"[LOG]   - Resultado: '{result_message}'")
+            logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Sem frame)")
+            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info("[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -912,7 +993,7 @@ class AudioLoop:
         try:
             if not os.path.exists(person_dir):
                 os.makedirs(person_dir)
-                print(f"[DeepFace] Diretório criado: {person_dir}")
+                logger.info("[DeepFace] Diretório criado: {person_dir}")
 
             # Extrai rosto(s) do frame
             detected_faces = DeepFace.extract_faces(
@@ -920,17 +1001,17 @@ class AudioLoop:
                 detector_backend=DEEPFACE_DETECTOR_BACKEND,
                 enforce_detection=True, # Garante que um rosto foi detectado
                 align=True,
-                silent=True
+               # silent=True
             )
 
             # Verifica se algum rosto foi detectado
             if not detected_faces or not isinstance(detected_faces, list) or 'facial_area' not in detected_faces[0]:
-                print(f"[DeepFace] Nenhum rosto detectado para {person_name}.")
+                logger.info("[DeepFace] Nenhum rosto detectado para {person_name}.")
                 result_message = f"Não consegui detectar um rosto claro para {person_name}."
                 # --- LOGGING FIM ---
-                print(f"[LOG] Finalizado: _handle_save_known_face (Erro: Rosto não detectado)")
-                print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                print(f"[LOG]   - Resultado: '{result_message}'")
+                logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Rosto não detectado)")
+                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info("[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -945,12 +1026,12 @@ class AudioLoop:
             face_image = frame_to_process[y1:y2, x1:x2]
 
             if face_image.size == 0:
-                 print(f"[DeepFace] Erro ao recortar rosto para {person_name} (imagem vazia).")
+                 logger.info("[DeepFace] Erro ao recortar rosto para {person_name} (imagem vazia).")
                  result_message = f"Erro ao processar o rosto de {person_name}."
                  # --- LOGGING FIM ---
-                 print(f"[LOG] Finalizado: _handle_save_known_face (Erro: Recorte vazio)")
-                 print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                 print(f"[LOG]   - Resultado: '{result_message}'")
+                 logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Recorte vazio)")
+                 logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                 logger.info("[LOG]   - Resultado: '{result_message}'")
                  # --- FIM LOGGING ---
                  return result_message
 
@@ -964,12 +1045,12 @@ class AudioLoop:
             # Salva a imagem do rosto
             save_success = cv2.imwrite(file_path, face_image)
             if not save_success:
-                print(f"[DeepFace] Erro ao salvar imagem em {file_path}")
+                logger.info("[DeepFace] Erro ao salvar imagem em {file_path}")
                 result_message = f"Erro ao salvar a imagem do rosto de {person_name}."
                 # --- LOGGING FIM ---
-                print(f"[LOG] Finalizado: _handle_save_known_face (Erro: Falha no imwrite)")
-                print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                print(f"[LOG]   - Resultado: '{result_message}'")
+                logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Falha no imwrite)")
+                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info("[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -980,25 +1061,25 @@ class AudioLoop:
             if os.path.exists(representations_pkl_path):
                 try:
                     os.remove(representations_pkl_path)
-                    print(f"[DeepFace] Cache de representações '{representations_pkl_path}' removido para atualização.")
+                    logger.info("[DeepFace] Cache de representações '{representations_pkl_path}' removido para atualização.")
                 except Exception as e_pkl:
-                    print(f"[DeepFace] Aviso: Falha ao remover cache de representações: {e_pkl}")
+                    logger.info("[DeepFace] Aviso: Falha ao remover cache de representações: {e_pkl}")
 
-            print(f"[DeepFace] Rosto de {person_name} salvo em {file_path}")
+            logger.info("[DeepFace] Rosto de {person_name} salvo em {file_path}")
             result_message = f"Rosto de {person_name} salvo com sucesso."
 
         except ValueError as ve: # Captura erro específico do DeepFace se enforce_detection=True falhar
-             print(f"[DeepFace] Nenhum rosto detectado (ValueError) para {person_name}: {ve}")
+             logger.info("[DeepFace] Nenhum rosto detectado (ValueError) para {person_name}: {ve}")
              result_message = f"Não consegui detectar um rosto claro para salvar para {person_name}."
         except Exception as e:
-            print(f"[DeepFace] Erro inesperado ao salvar rosto para {person_name}: {e}")
+            logger.info("[DeepFace] Erro inesperado ao salvar rosto para {person_name}: {e}")
             traceback.print_exc()
             result_message = f"Ocorreu um erro ao tentar salvar o rosto de {person_name}."
 
         # --- LOGGING FIM ---
-        print(f"[LOG] Finalizado: _handle_save_known_face")
-        print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        print(f"[LOG]   - Resultado: '{result_message}'")
+        logger.info("[LOG] Finalizado: _handle_save_known_face")
+        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info("[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
@@ -1006,25 +1087,37 @@ class AudioLoop:
     def _handle_identify_person_in_front(self) -> str:
         """Processa a chamada de função para identificar uma pessoa."""
         # --- LOGGING INÍCIO ---
-        print(f"[LOG] Executando: _handle_identify_person_in_front")
+        logger.info("[LOG] Executando: _handle_identify_person_in_front")
         # --- FIM LOGGING ---
 
         start_time = time.time()
         result_message = ""
 
-        print("[DeepFace] Iniciando identificação de pessoa...")
+        # Verifica se pandas foi importado com sucesso
+        if pd is None:
+            logger.info("[DeepFace] Erro: Biblioteca 'pandas' não está disponível. Identificação desabilitada.")
+            result_message = "Erro interno: dependência 'pandas' faltando para identificação."
+            # --- LOGGING FIM ---
+            logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem pandas)")
+            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info("[LOG]   - Resultado: '{result_message}'")
+            # --- FIM LOGGING ---
+            return result_message
+
+
+        logger.info("[DeepFace] Iniciando identificação de pessoa...")
         frame_to_process = None
         with self.frame_lock:
             if self.latest_bgr_frame is not None:
                 frame_to_process = self.latest_bgr_frame.copy()
 
         if frame_to_process is None:
-            print("[DeepFace] Erro: Nenhum frame disponível para identificar.")
+            logger.info("[DeepFace] Erro: Nenhum frame disponível para identificar.")
             result_message = "Não foi possível capturar a imagem para identificar."
             # --- LOGGING FIM ---
-            print(f"[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem frame)")
-            print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            print(f"[LOG]   - Resultado: '{result_message}'")
+            logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem frame)")
+            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info("[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -1039,19 +1132,19 @@ class AudioLoop:
                 detector_backend=DEEPFACE_DETECTOR_BACKEND,
                 distance_metric=DEEPFACE_DISTANCE_METRIC,
                 enforce_detection=True, # Alterado para True para buscar rostos mais claros
-                silent=True,
+                #silent=True,
                 align=True
             )
 
             # DeepFace.find retorna uma lista de DataFrames. Pegamos o primeiro.
             # Verifica se a lista ou o DataFrame estão vazios
             if not dfs or not isinstance(dfs, list) or not isinstance(dfs[0], pd.DataFrame) or dfs[0].empty:
-                print("[DeepFace] Nenhuma correspondência encontrada ou rosto não detectado claramente.")
+                logger.info("[DeepFace] Nenhuma correspondência encontrada ou rosto não detectado claramente.")
                 result_message = "Não consegui reconhecer ninguém ou não detectei um rosto claro."
                 # --- LOGGING FIM ---
-                print(f"[LOG] Finalizado: _handle_identify_person_in_front (Nenhuma correspondência)")
-                print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                print(f"[LOG]   - Resultado: '{result_message}'")
+                logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Nenhuma correspondência)")
+                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info("[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -1072,12 +1165,12 @@ class AudioLoop:
                     if found_col:
                         distance_col_name = found_col
                     else:
-                        print(f"[DeepFace] Erro: Coluna de distância '{distance_col_name}' ou similar não encontrada. Colunas: {df.columns.tolist()}")
+                        logger.info("[DeepFace] Erro: Coluna de distância '{distance_col_name}' ou similar não encontrada. Colunas: {df.columns.tolist()}")
                         result_message = "Erro ao processar resultado da identificação (coluna de distância)."
                         # --- LOGGING FIM ---
-                        print(f"[LOG] Finalizado: _handle_identify_person_in_front (Erro: Coluna distância)")
-                        print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                        print(f"[LOG]   - Resultado: '{result_message}'")
+                        logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Coluna distância)")
+                        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                        logger.info("[LOG]   - Resultado: '{result_message}'")
                         # --- FIM LOGGING ---
                         return result_message
 
@@ -1091,7 +1184,7 @@ class AudioLoop:
             person_name = os.path.basename(os.path.dirname(best_match_identity_path))
             distance = best_match[distance_col_name]
 
-            print(f"[DeepFace] Pessoa potencialmente identificada: {person_name} (Distância: {distance:.4f})")
+            logger.info("[DeepFace] Pessoa potencialmente identificada: {person_name} (Distância: {distance:.4f})")
 
             # Define limiares de distância (ajustar experimentalmente!)
             thresholds = {
@@ -1108,27 +1201,25 @@ class AudioLoop:
             if distance <= threshold:
                 result_message = f"A pessoa na sua frente parece ser {person_name}."
             else:
-                print(f"[DeepFace] Distância {distance:.4f} > limiar ({threshold}). Não reconhecido com confiança.")
+                logger.info("[DeepFace] Distância {distance:.4f} > limiar ({threshold}). Não reconhecido com confiança.")
                 # Poderia retornar o nome com baixa confiança, ou uma mensagem genérica
                 result_message = "Não tenho certeza de quem é, mas detectei um rosto."
                 # result_message = f"Detectei um rosto, mas não tenho certeza. Pode ser {person_name}?"
 
         except ValueError as ve: # Captura erro se enforce_detection=True e nenhum rosto for encontrado
-            print(f"[DeepFace] Erro (ValueError) ao identificar: {ve}")
+            logger.info("[DeepFace] Erro (ValueError) ao identificar: {ve}")
             result_message = "Não detectei um rosto claro para identificar."
-        except ImportError:
-             # Deepface.find pode precisar de pandas, que não foi importado explicitamente
-             print("[DeepFace] Erro: A biblioteca 'pandas' pode ser necessária para DeepFace.find. Instale com 'pip install pandas'.")
-             result_message = "Erro interno ao processar identificação (dependência faltando)."
+        # except ImportError: # Já tratado no início da função
+        #      pass
         except Exception as e:
-            print(f"[DeepFace] Erro inesperado ao identificar: {e}")
+            logger.info("[DeepFace] Erro inesperado ao identificar: {e}")
             traceback.print_exc()
             result_message = "Ocorreu um erro ao tentar identificar a pessoa."
 
         # --- LOGGING FIM ---
-        print(f"[LOG] Finalizado: _handle_identify_person_in_front")
-        print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        print(f"[LOG]   - Resultado: '{result_message}'")
+        logger.info("[LOG] Finalizado: _handle_identify_person_in_front")
+        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info("[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
@@ -1136,7 +1227,7 @@ class AudioLoop:
     def _run_midas_inference(self, frame_bgr: np.ndarray) -> Optional[np.ndarray]:
         # (Função _run_midas_inference inalterada - omitida para brevidade)
         if not self.midas_model or not self.midas_transform:
-            print("[MiDaS] Modelo ou transformador não carregado.")
+            logger.info("[MiDaS] Modelo ou transformador não carregado.")
             return None
         try:
             # Converte BGR para RGB
@@ -1158,7 +1249,7 @@ class AudioLoop:
             depth_map = prediction.cpu().numpy()
             return depth_map
         except Exception as e:
-            print(f"[MiDaS] Erro durante a inferência: {e}")
+            logger.info("[MiDaS] Erro durante a inferência: {e}")
             # traceback.print_exc() # Descomente para depuração detalhada do MiDaS
             return None
 
@@ -1169,11 +1260,11 @@ class AudioLoop:
         highest_conf = -1.0
         # Obtém a lista de nomes de classe YOLO correspondentes ao tipo de objeto pedido
         target_yolo_classes = YOLO_CLASS_MAP.get(object_type.lower(), [object_type.lower()])
-        # print(f"[YOLO Match] Procurando por classes: {target_yolo_classes}") # Log opcional
+        # logger.info("[YOLO Match] Procurando por classes: {target_yolo_classes}") # Log opcional
 
         # Verifica se há resultados YOLO e se o modelo está carregado
         if not yolo_results or not self.yolo_model:
-             # print("[YOLO Match] Sem resultados YOLO ou modelo não carregado.") # Log opcional
+             # logger.info("[YOLO Match] Sem resultados YOLO ou modelo não carregado.") # Log opcional
              return None
 
         # Itera sobre os resultados (pode haver mais de um se o modelo processar em batch, embora aqui seja 1)
@@ -1184,7 +1275,7 @@ class AudioLoop:
                 for box in result.boxes:
                     # Verifica se a caixa tem os atributos necessários
                     if not (hasattr(box, 'cls') and hasattr(box, 'conf') and hasattr(box, 'xyxy')):
-                        # print("[YOLO Match] Caixa malformada encontrada.") # Log opcional
+                        # logger.info("[YOLO Match] Caixa malformada encontrada.") # Log opcional
                         continue # Pula caixas malformadas
 
                     # Obtém ID da classe, confiança e coordenadas
@@ -1200,7 +1291,7 @@ class AudioLoop:
                     if cls_id < len(self.yolo_model.names):
                         class_name = self.yolo_model.names[cls_id]
                     else:
-                        # print(f"[YOLO Match] ID de classe inválido: {cls_id}") # Log opcional
+                        # logger.info("[YOLO Match] ID de classe inválido: {cls_id}") # Log opcional
                         continue # ID inválido
 
                     # Verifica se a classe detectada é uma das classes alvo
@@ -1213,7 +1304,7 @@ class AudioLoop:
                             coords = list(map(int, coords_tensor))
                             bbox_dict = {'x1': coords[0], 'y1': coords[1], 'x2': coords[2], 'y2': coords[3]}
                             best_match = (bbox_dict, conf, class_name)
-                            # print(f"[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
+                            # logger.info("[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
 
         # Retorna a melhor correspondência encontrada (ou None)
         return best_match
@@ -1295,7 +1386,7 @@ class AudioLoop:
                         # (Poderia usar MiDaS aqui, mas complica)
 
                         if horizontally_aligned and vertically_aligned: # and reasonable_size:
-                            # print(f"[Surface Check] Objeto em ({target_center_x},{target_bottom_y}) considerado sobre '{class_name}' em ({s_x1}-{s_x2}, {s_y1}-{s_y2})") # Log opcional
+                            # logger.info("[Surface Check] Objeto em ({target_center_x},{target_bottom_y}) considerado sobre '{class_name}' em ({s_x1}-{s_x2}, {s_y1}-{s_y2})") # Log opcional
                             return True # Encontrou uma superfície sob o objeto
         return False # Nenhuma superfície encontrada sob o objeto
 
@@ -1303,14 +1394,14 @@ class AudioLoop:
     def _handle_find_object_and_estimate_distance(self, object_description: str, object_type: str) -> str:
         """Processa a chamada de função para localizar um objeto e estimar distância."""
         # --- LOGGING INÍCIO ---
-        print(f"[LOG] Executando: _handle_find_object_and_estimate_distance")
-        print(f"[LOG]   - Argumentos: object_description='{object_description}', object_type='{object_type}'")
+        logger.info("[LOG] Executando: _handle_find_object_and_estimate_distance")
+        logger.info("[LOG]   - Argumentos: object_description='{object_description}', object_type='{object_type}'")
         # --- FIM LOGGING ---
 
         start_time = time.time()
         result_message = ""
 
-        print(f"[Localizar Objeto] Buscando por '{object_description}' (tipo: '{object_type}')...")
+        logger.info("[Localizar Objeto] Buscando por '{object_description}' (tipo: '{object_type}')...")
         frame_to_process = None
         yolo_results_for_frame = None
         frame_height, frame_width = 0, 0
@@ -1326,24 +1417,24 @@ class AudioLoop:
 
         # Verifica se temos um frame válido
         if frame_to_process is None or frame_width == 0 or frame_height == 0:
-             print("[Localizar Objeto] Erro: Nenhum frame válido disponível.")
+             logger.info("[Localizar Objeto] Erro: Nenhum frame válido disponível.")
              result_message = f"Usuário, não estou enxergando nada no momento para localizar o {object_type}."
              # --- LOGGING FIM ---
-             print(f"[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem frame)")
-             print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-             print(f"[LOG]   - Resultado: '{result_message}'")
+             logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem frame)")
+             logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+             logger.info("[LOG]   - Resultado: '{result_message}'")
              # --- FIM LOGGING ---
              return result_message
 
         # Verifica se temos resultados YOLO para este frame
         if not yolo_results_for_frame:
-            print("[Localizar Objeto] Erro: Nenhum resultado YOLO disponível para o frame atual.")
+            logger.info("[Localizar Objeto] Erro: Nenhum resultado YOLO disponível para o frame atual.")
             # Isso pode acontecer se o YOLO falhou ou ainda não processou o frame
             result_message = f"Usuário, não consegui processar a imagem a tempo para encontrar o {object_type}."
             # --- LOGGING FIM ---
-            print(f"[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem resultados YOLO)")
-            print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            print(f"[LOG]   - Resultado: '{result_message}'")
+            logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem resultados YOLO)")
+            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info("[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -1352,28 +1443,28 @@ class AudioLoop:
 
         # Fallback: Se não encontrou pelo tipo, tenta pela última palavra da descrição
         if not best_yolo_match:
-            print(f"[Localizar Objeto] Nenhum objeto do tipo '{object_type}' encontrado. Tentando fallback com descrição...")
+            logger.info("[Localizar Objeto] Nenhum objeto do tipo '{object_type}' encontrado. Tentando fallback com descrição...")
             last_word = object_description.split(" ")[-1].lower()
             # Evita tentar o mesmo tipo duas vezes se type já era a última palavra
             if last_word != object_type.lower():
                 target_yolo_classes_fallback = YOLO_CLASS_MAP.get(last_word, [last_word])
-                print(f"[Localizar Objeto] Fallback: Buscando por classes: {target_yolo_classes_fallback}")
+                logger.info("[Localizar Objeto] Fallback: Buscando por classes: {target_yolo_classes_fallback}")
                 best_yolo_match = self._find_best_yolo_match(last_word, yolo_results_for_frame)
 
             # Se ainda não encontrou após o fallback
             if not best_yolo_match:
-                 print(f"[Localizar Objeto] Objeto '{object_description}' não encontrado mesmo com fallback.")
+                 logger.info("[Localizar Objeto] Objeto '{object_description}' não encontrado mesmo com fallback.")
                  result_message = f"Usuário, não consegui encontrar um(a) {object_description} na imagem."
                  # --- LOGGING FIM ---
-                 print(f"[LOG] Finalizado: _handle_find_object_and_estimate_distance (Não encontrado)")
-                 print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                 print(f"[LOG]   - Resultado: '{result_message}'")
+                 logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Não encontrado)")
+                 logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                 logger.info("[LOG]   - Resultado: '{result_message}'")
                  # --- FIM LOGGING ---
                  return result_message
 
         # Se encontrou um objeto
         target_bbox, confidence, detected_class = best_yolo_match
-        print(f"[Localizar Objeto] Melhor correspondência YOLO: Classe '{detected_class}', Conf: {confidence:.2f}, BBox: {target_bbox}")
+        logger.info("[Localizar Objeto] Melhor correspondência YOLO: Classe '{detected_class}', Conf: {confidence:.2f}, BBox: {target_bbox}")
 
         # Verifica se está sobre uma superfície
         is_on_surface = self._check_if_on_surface(target_bbox, yolo_results_for_frame)
@@ -1386,10 +1477,10 @@ class AudioLoop:
         distance_steps = -1
         depth_map = None
         if self.midas_model:
-            print("[Localizar Objeto] Executando MiDaS...")
+            logger.info("[Localizar Objeto] Executando MiDaS...")
             depth_map = self._run_midas_inference(frame_to_process) # Executa inferência MiDaS
         else:
-            print("[Localizar Objeto] MiDaS não disponível. Não é possível estimar distância.")
+            logger.info("[Localizar Objeto] MiDaS não disponível. Não é possível estimar distância.")
 
         if depth_map is not None:
             try:
@@ -1421,13 +1512,13 @@ class AudioLoop:
                     estimated_meters = max(0.5, min(estimated_meters, 20))
                     # Converte metros para passos
                     distance_steps = max(1, round(estimated_meters / METERS_PER_STEP)) # Garante pelo menos 1 passo
-                    print(f"[Localizar Objeto] Profundidade MiDaS no centro ({center_y},{center_x}): {depth_value:.4f}, Metros Estimados (heurístico): {estimated_meters:.2f}, Passos: {distance_steps}")
+                    logger.info("[Localizar Objeto] Profundidade MiDaS no centro ({center_y},{center_x}): {depth_value:.4f}, Metros Estimados (heurístico): {estimated_meters:.2f}, Passos: {distance_steps}")
                 else:
-                     print("[Localizar Objeto] Valor de profundidade MiDaS inválido ou muito baixo no centro do objeto.")
+                     logger.info("[Localizar Objeto] Valor de profundidade MiDaS inválido ou muito baixo no centro do objeto.")
             except IndexError:
-                print(f"[Localizar Objeto] Erro: Coordenadas ({center_y},{center_x}) fora dos limites do mapa de profundidade ({depth_map.shape}).")
+                logger.info("[Localizar Objeto] Erro: Coordenadas ({center_y},{center_x}) fora dos limites do mapa de profundidade ({depth_map.shape}).")
             except Exception as e_depth:
-                print(f"[Localizar Objeto] Erro ao extrair/processar profundidade do MiDaS: {e_depth}")
+                logger.info("[Localizar Objeto] Erro ao extrair/processar profundidade do MiDaS: {e_depth}")
                 # traceback.print_exc() # Descomente para depuração
                 distance_steps = -1 # Reseta se houve erro
         # else: MiDaS não disponível ou falhou, distance_steps continua -1
@@ -1462,38 +1553,38 @@ class AudioLoop:
 
 
         # --- LOGGING FIM ---
-        print(f"[LOG] Finalizado: _handle_find_object_and_estimate_distance")
-        print(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        print(f"[LOG]   - Resultado: '{result_message}'")
+        logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance")
+        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info("[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
 
     async def receive_audio(self):
         # (Função receive_audio inalterada, exceto por traceback e comentário - omitida para brevidade)
-        print("Receive_audio pronto para receber respostas do Gemini...")
+        logger.info("Receive_audio pronto para receber respostas do Gemini...")
         try:
             if not self.session:
-                print("Sessão Gemini não estabelecida em receive_audio. Encerrando.")
+                logger.info("Sessão Gemini não estabelecida em receive_audio. Encerrando.")
                 self.stop_event.set()
                 return
 
             while not self.stop_event.is_set():
                 # Verifica se a sessão ainda existe (pode ser fechada por outra tarefa)
                 if not self.session:
-                    print("Sessão Gemini desconectada em receive_audio. Aguardando reconexão ou parada.")
+                    logger.info("Sessão Gemini desconectada em receive_audio. Aguardando reconexão ou parada.")
                     await asyncio.sleep(1)
                     if not self.session and not self.stop_event.is_set(): # Verifica de novo
-                        print("Sessão ainda não disponível. Sinalizando parada para reconexão.")
+                        logger.info("Sessão ainda não disponível. Sinalizando parada para reconexão.")
                         self.stop_event.set() # Sinaliza para o loop run tentar reconectar
                     elif self.session:
-                        print("Sessão Gemini reconectada.")
+                        logger.info("Sessão Gemini reconectada.")
                     break # Sai do loop interno para o run tentar reconectar ou parar
 
 
                 try:
                     has_received_data_in_turn = False
-                    # print("Aguardando próximo turno de resposta do Gemini...") # Log opcional
+                    # logger.info("Aguardando próximo turno de resposta do Gemini...") # Log opcional
 
                     # NOTA: Este loop `async for` não tem um timeout explícito.
                     # Se a API travar ou parar de enviar dados sem fechar o stream,
@@ -1503,7 +1594,7 @@ class AudioLoop:
                         has_received_data_in_turn = True
 
                         if self.stop_event.is_set():
-                            print("Sinal de parada recebido durante processamento de resposta.")
+                            logger.info("Sinal de parada recebido durante processamento de resposta.")
                             break
 
                         # --- Processa Áudio ---
@@ -1512,7 +1603,7 @@ class AudioLoop:
                                 try:
                                     self.audio_in_queue.put_nowait(response_part.data)
                                 except asyncio.QueueFull:
-                                    print("Aviso: Fila de áudio de entrada cheia. Áudio descartado.")
+                                    logger.info("Aviso: Fila de áudio de entrada cheia. Áudio descartado.")
                             continue # Processou áudio, vai para próxima parte
 
                         # --- Processa Nome Pendente (Fluxo save_known_face) ---
@@ -1520,15 +1611,15 @@ class AudioLoop:
                             user_provided_name = None
                             if response_part.text: # Gemini transcreveu fala ou usuário digitou
                                 user_provided_name = response_part.text.strip()
-                                print(f"[Trackie] Recebido texto enquanto aguardava nome: '{user_provided_name}'")
+                                logger.info("[Trackie] Recebido texto enquanto aguardava nome: '{user_provided_name}'")
 
                             if user_provided_name:
-                                print(f"[Trackie] Processando nome '{user_provided_name}' para salvar rosto...")
+                                logger.info("[Trackie] Processando nome '{user_provided_name}' para salvar rosto...")
                                 self.awaiting_name_for_save_face = False # Reseta a flag
 
                                 original_function_name_pending = "save_known_face" # Nome da função original
 
-                                print("Pensando...") # Feedback visual
+                                logger.info("Pensando...") # Feedback visual
                                 self.thinking_event.set() # Pausa envio de dados
 
                                 # Feedback de voz ANTES de executar a função
@@ -1537,15 +1628,15 @@ class AudioLoop:
                                     try:
                                         # Envia feedback e termina o turno da IA para que ela fale
                                         await self.session.send(input=voice_feedback_msg, end_of_turn=True)
-                                        print(f"  [Feedback Enviado]: {voice_feedback_msg}")
+                                        logger.info("  [Feedback Enviado]: {voice_feedback_msg}")
                                     except Exception as e_feedback:
-                                        print(f"Erro ao enviar feedback de voz (awaiting name): {e_feedback}")
+                                        logger.error(" ao enviar feedback de voz (awaiting name): {e_feedback}")
 
                                 # Executa a função síncrona em outra thread
                                 result_message = await asyncio.to_thread(self._handle_save_known_face, user_provided_name)
 
                                 # Envia o resultado da função de volta para o Gemini
-                                print(f"  [Trackie] Resultado da Função '{original_function_name_pending}': {result_message}")
+                                logger.info("  [Trackie] Resultado da Função '{original_function_name_pending}': {result_message}")
                                 if self.session:
                                     try:
                                         await self.session.send(
@@ -1558,29 +1649,29 @@ class AudioLoop:
                                             )
                                             # Não usar end_of_turn=True aqui, deixa Gemini decidir quando responder
                                         )
-                                        print("  [Trackie] Resultado da função (awaiting name) enviado.")
+                                        logger.info("  [Trackie] Resultado da função (awaiting name) enviado.")
                                     except Exception as e_send_fc_resp:
-                                        print(f"Erro ao enviar FunctionResponse (awaiting name): {e_send_fc_resp}")
+                                        logger.error(" ao enviar FunctionResponse (awaiting name): {e_send_fc_resp}")
                                 else:
-                                    print("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função (awaiting name).")
+                                    logger.info("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função (awaiting name).")
 
                                 # Libera o envio de dados
                                 if self.thinking_event.is_set():
                                     self.thinking_event.clear()
-                                print("Pensamento concluído (awaiting name).")
+                                logger.info("Pensamento concluído (awaiting name).")
                                 continue # Processamos este input, vamos para o próximo response_part
 
                         # --- Processa Texto da IA ---
                         if response_part.text:
                             # Imprime texto recebido do Gemini (pode ser parcial)
-                            print(f"\n[Gemini Texto]: {response_part.text}", end="")
+                            logger.info("\n[Gemini Texto]: {response_part.text}", end="")
 
                         # --- Processa Chamada de Função ---
                         if getattr(response_part, "function_call", None):
                             fc = response_part.function_call
                             function_name = fc.name
                             args = {key: val for key, val in fc.args.items()}
-                            print(f"\n[Gemini Function Call] Recebido: {function_name}, Args: {args}")
+                            logger.info("\n[Gemini Function Call] Recebido: {function_name}, Args: {args}")
 
                             result_message = None # Inicializa resultado
 
@@ -1589,19 +1680,19 @@ class AudioLoop:
                                 self.awaiting_name_for_save_face = True # Ativa a flag
                                 if self.thinking_event.is_set(): # Garante que não está pensando enquanto pergunta
                                     self.thinking_event.clear()
-                                print("[Trackie] Nome não fornecido para save_known_face. Solicitando ao usuário.")
+                                logger.info("[Trackie] Nome não fornecido para save_known_face. Solicitando ao usuário.")
                                 # Pede o nome ao usuário via Gemini (voz)
                                 if self.session:
                                     try:
                                         # Envia a pergunta e termina o turno da IA
                                         await self.session.send(input="Usuário, por favor forneça o nome da pessoa para salvar o rosto.", end_of_turn=True)
                                     except Exception as e_ask_name:
-                                        print(f"Erro ao pedir nome para save_face: {e_ask_name}")
+                                        logger.error(" ao pedir nome para save_face: {e_ask_name}")
                                 # Não executa a função local nem envia FC response agora
 
                             # --- Caso Normal: Outras funções ou save_known_face com nome ---
                             else:
-                                print("Pensando...") # Feedback visual
+                                logger.info("Pensando...") # Feedback visual
                                 self.thinking_event.set() # Pausa envio
 
                                 # Monta mensagem de feedback de voz
@@ -1620,18 +1711,18 @@ class AudioLoop:
                                     try:
                                         # Envia feedback e termina o turno da IA
                                         await self.session.send(input=voice_feedback_msg, end_of_turn=True)
-                                        print(f"  [Feedback Enviado]: {voice_feedback_msg}")
+                                        logger.info("  [Feedback Enviado]: {voice_feedback_msg}")
                                     except Exception as e_feedback:
-                                        print(f"Erro ao enviar feedback pré-função: {e_feedback}")
+                                        logger.error(" ao enviar feedback pré-função: {e_feedback}")
 
                                 # --- Executa a Função Local Correspondente ---
                                 # Verifica se a função requer modo câmera
                                 vision_functions = ["save_known_face", "identify_person_in_front", "find_object_and_estimate_distance"]
                                 if self.video_mode != "camera" and function_name in vision_functions:
-                                    print(f"[Function Call] '{function_name}' requer modo câmera, mas modo atual é '{self.video_mode}'.")
+                                    logger.info("[Function Call] '{function_name}' requer modo câmera, mas modo atual é '{self.video_mode}'.")
                                     result_message = "Desculpe, esta função só está disponível quando a câmera está ativa."
                                 else:
-                                    print(f"  [Trackie] Processando Função '{function_name}' em background...")
+                                    logger.info("  [Trackie] Processando Função '{function_name}' em background...")
                                     # Chama o handler apropriado em outra thread
                                     try:
                                         if function_name == "save_known_face":
@@ -1640,16 +1731,12 @@ class AudioLoop:
                                                 result_message = await asyncio.to_thread(self._handle_save_known_face, person_name_arg)
                                             else:
                                                 result_message = "Erro interno: nome não disponível para salvar rosto neste ponto."
-                                                print(f"ERRO LÓGICO: Tentativa de chamar _handle_save_known_face sem nome.")
+                                                logger.error(" LÓGICO: Tentativa de chamar _handle_save_known_face sem nome.")
                                         elif function_name == "identify_person_in_front":
-                                            # Importa pandas aqui se necessário para DeepFace.find
-                                            try:
-                                                global pd
-                                                import pandas as pd
-                                            except ImportError:
-                                                 print("AVISO: Biblioteca 'pandas' não encontrada. Necessária para DeepFace.find.")
+                                            # Verifica se pandas está disponível
+                                            if pd is None:
                                                  result_message = "Erro interno: dependência 'pandas' faltando para identificação."
-                                            if 'pd' in globals():
+                                            else:
                                                 result_message = await asyncio.to_thread(self._handle_identify_person_in_front)
 
                                         elif function_name == "find_object_and_estimate_distance":
@@ -1665,19 +1752,19 @@ class AudioLoop:
                                                     )
                                             else:
                                                 result_message = "Descrição ou tipo do objeto não fornecido corretamente para localização."
-                                                print(f"ERRO: Argumentos faltando para find_object_and_estimate_distance: desc='{desc}', type='{obj_type}'")
+                                                logger.error(": Argumentos faltando para find_object_and_estimate_distance: desc='{desc}', type='{obj_type}'")
                                         else:
                                             result_message = f"Função '{function_name}' desconhecida ou não implementada."
-                                            print(f"AVISO: Recebida chamada para função não mapeada: {function_name}")
+                                            logger.warning(": Recebida chamada para função não mapeada: {function_name}")
                                     except Exception as e_handler:
-                                         print(f"Erro ao executar handler para '{function_name}': {e_handler}")
+                                         logger.error(" ao executar handler para '{function_name}': {e_handler}")
                                          traceback.print_exc()
                                          result_message = f"Ocorreu um erro interno ao processar a função {function_name}."
 
 
                             # --- Envia Resultado da Função de Volta (se houver) ---
                             if result_message is not None: # Só envia se um resultado foi gerado
-                                print(f"  [Trackie] Resultado da Função '{function_name}': {result_message}")
+                                logger.info("  [Trackie] Resultado da Função '{function_name}': {result_message}")
                                 if self.session:
                                     try:
                                         await self.session.send(
@@ -1689,33 +1776,33 @@ class AudioLoop:
                                                 )]
                                             )
                                         )
-                                        print("  [Trackie] Resultado da função enviado.")
+                                        logger.info("  [Trackie] Resultado da função enviado.")
                                     except Exception as e_send_fc_resp_main:
-                                        print(f"Erro ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
+                                        logger.error(" ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
                                 else:
-                                    print("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função.")
+                                    logger.info("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função.")
 
                                 # Libera o envio de dados após processar a função
                                 if self.thinking_event.is_set():
                                      self.thinking_event.clear()
-                                print("Pensamento concluído (function call).")
+                                logger.info("Pensamento concluído (function call).")
                             # Se result_message é None (caso de pedir nome), thinking_event já foi limpo antes
 
                     # --- Fim do processamento de um turno da IA ---
                     if not self.stop_event.is_set():
                         if has_received_data_in_turn:
-                            # print("\nFim do turno de resposta do Gemini.") # Log opcional
+                            # logger.info("\nFim do turno de resposta do Gemini.") # Log opcional
                             pass # Continua esperando o próximo turno
                         else:
                             # Se o loop `async for` terminar sem dados, pode indicar fim normal ou problema
-                            # print("Stream do turno atual terminou sem dados.") # Log opcional
+                            # logger.info("Stream do turno atual terminou sem dados.") # Log opcional
                             await asyncio.sleep(0.05) # Pequena pausa
                     if self.stop_event.is_set():
                         break # Sai do loop `async for` se stop foi chamado
 
                 # --- Tratamento de Erros no Loop de Recebimento ---
                 except Exception as e_inner_loop:
-                    print(f"Erro durante o recebimento/processamento de resposta: {e_inner_loop}")
+                    logger.error(" durante o recebimento/processamento de resposta: {e_inner_loop}")
                     error_str_upper = str(e_inner_loop).upper()
                     # Verifica erros que indicam sessão fechada/perdida
                     if "LIVESESSION CLOSED" in error_str_upper or \
@@ -1723,7 +1810,7 @@ class AudioLoop:
                        "DEADLINE EXCEEDED" in error_str_upper or \
                        "RST_STREAM" in error_str_upper or \
                        "UNAVAILABLE" in error_str_upper:
-                        print("Erro indica que a sessão Gemini foi fechada/perdida. Sinalizando parada.")
+                        logger.info("Erro indica que a sessão Gemini foi fechada/perdida. Sinalizando parada.")
                         self.stop_event.set()
                         break # Sai do loop while principal
                     else:
@@ -1733,17 +1820,17 @@ class AudioLoop:
 
             # Se o loop while terminar por causa do stop_event
             if self.stop_event.is_set():
-                print("Loop de recebimento de áudio interrompido pelo stop_event.")
+                logger.info("Loop de recebimento de áudio interrompido pelo stop_event.")
 
         except asyncio.CancelledError:
-            print("receive_audio foi cancelado.")
+            logger.info("receive_audio foi cancelado.")
         except Exception as e:
             # Erro crítico fora do loop principal (ex: na configuração inicial)
-            print(f"Erro crítico em receive_audio: {e}")
+            logger.error(" crítico em receive_audio: {e}")
             traceback.print_exc()
             self.stop_event.set() # Garante que tudo pare
         finally:
-            print("receive_audio finalizado.")
+            logger.info("receive_audio finalizado.")
             # Limpa a flag caso a tarefa seja cancelada enquanto esperava nome
             self.awaiting_name_for_save_face = False
             # Garante que thinking_event seja limpo na saída
@@ -1754,26 +1841,26 @@ class AudioLoop:
     async def play_audio(self):
         # (Função play_audio inalterada, exceto por traceback em erro crítico - omitida para brevidade)
         if not pya:
-            print("PyAudio não inicializado. Tarefa play_audio não pode iniciar.")
+            logger.info("PyAudio não inicializado. Tarefa play_audio não pode iniciar.")
             return
 
         stream = None
         output_rate = RECEIVE_SAMPLE_RATE # Taxa padrão
         try:
-            print("Configurando stream de áudio de saída...")
+            logger.info("Configurando stream de áudio de saída...")
             try:
                 # Tenta usar a taxa de amostragem do dispositivo padrão
                 out_device_info = pya.get_default_output_device_info()
                 output_rate = int(out_device_info.get('defaultSampleRate', RECEIVE_SAMPLE_RATE))
-                print(f"Usando dispositivo de saída: {out_device_info['name']} @ {output_rate} Hz")
+                logger.info("Usando dispositivo de saída: {out_device_info['name']} @ {output_rate} Hz")
             except Exception as e_dev_info:
-                print(f"Não foi possível obter info do dispositivo de saída padrão ({e_dev_info}). Usando taxa padrão: {output_rate} Hz")
+                logger.info("Não foi possível obter info do dispositivo de saída padrão ({e_dev_info}). Usando taxa padrão: {output_rate} Hz")
 
             # Abre o stream de saída em outra thread
             stream = await asyncio.to_thread(
                 pya.open, format=FORMAT, channels=CHANNELS, rate=output_rate, output=True
             )
-            print("Player de áudio pronto.")
+            logger.info("Player de áudio pronto.")
 
             while not self.stop_event.is_set():
                 # Verifica se a fila de entrada existe
@@ -1786,7 +1873,7 @@ class AudioLoop:
                     bytestream = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.5)
 
                     if bytestream is None: # Sinal de parada da fila
-                        print("Recebido sinal de encerramento (None) para play_audio.")
+                        logger.info("Recebido sinal de encerramento (None) para play_audio.")
                         break # Sai do loop while
 
                     # Verifica se o stream está ativo e escreve os dados
@@ -1794,7 +1881,7 @@ class AudioLoop:
                         # Escreve no stream em outra thread
                         await asyncio.to_thread(stream.write, bytestream)
                     else:
-                        print("Stream de áudio para playback não está ativo. Descartando áudio.")
+                        logger.info("Stream de áudio para playback não está ativo. Descartando áudio.")
                         # Não marca task_done se descartou? Ou marca?
                         # Melhor marcar para não bloquear a fila caso o stream morra.
                         if self.audio_in_queue: self.audio_in_queue.task_done()
@@ -1812,31 +1899,31 @@ class AudioLoop:
                 except OSError as e_os_play:
                     # Erro comum se o stream for fechado inesperadamente
                     if "Stream closed" in str(e_os_play):
-                        print("Stream de playback fechado (OSError). Encerrando play_audio.")
+                        logger.info("Stream de playback fechado (OSError). Encerrando play_audio.")
                         break # Sai do loop while
                     else:
-                        print(f"Erro de OS ao reproduzir áudio: {e_os_play}")
+                        logger.error(" de OS ao reproduzir áudio: {e_os_play}")
                         traceback.print_exc()
                         break # Sai em outros erros de OS também
                 except Exception as e_inner:
                     # Erro genérico durante a reprodução
-                    print(f"Erro ao reproduzir áudio (interno): {e_inner}")
+                    logger.error(" ao reproduzir áudio (interno): {e_inner}")
                     if "Stream closed" in str(e_inner): # Verifica se o erro indica stream fechado
-                        print("Stream de playback fechado (Exception). Encerrando play_audio.")
+                        logger.info("Stream de playback fechado (Exception). Encerrando play_audio.")
                         break # Sai do loop while
                     traceback.print_exc()
                     # Decide se continua ou para em outros erros
                     # break
 
         except asyncio.CancelledError:
-            print("play_audio foi cancelado.")
+            logger.info("play_audio foi cancelado.")
         except Exception as e:
             # Erro crítico na configuração ou loop principal
-            print(f"Erro crítico em play_audio: {e}")
+            logger.error(" crítico em play_audio: {e}")
             traceback.print_exc()
             # Não seta stop_event aqui, deixa o run gerenciar
         finally:
-            print("Finalizando play_audio...")
+            logger.info("Finalizando play_audio...")
             # Garante que o stream seja fechado
             if stream:
                 try:
@@ -1845,15 +1932,15 @@ class AudioLoop:
                     if stream.is_active():
                          stream.stop_stream()
                     stream.close()
-                    print("Stream de áudio de saída fechado.")
+                    logger.info("Stream de áudio de saída fechado.")
                 except Exception as e_close:
-                    print(f"Erro ao fechar stream de áudio de saída: {e_close}")
-            print("play_audio concluído.")
+                    logger.error(" ao fechar stream de áudio de saída: {e_close}")
+            logger.info("play_audio concluído.")
 
 
     async def run(self):
         # (Função run inalterada, exceto por traceback em erro crítico - omitida para brevidade)
-        print("Iniciando AudioLoop...")
+        logger.info("Iniciando AudioLoop...")
         max_retries = 3
         retry_delay_base = 2.0 # Aumentado ligeiramente o delay base
 
@@ -1863,7 +1950,7 @@ class AudioLoop:
             try:
                 # Se for uma tentativa de reconexão, espera
                 if attempt > 0:
-                     print(f"Tentativa de reconexão {attempt}/{max_retries} após {retry_delay:.1f}s...")
+                     logger.info("Tentativa de reconexão {attempt}/{max_retries} após {retry_delay:.1f}s...")
                      await asyncio.sleep(retry_delay)
 
                 # --- Limpa estado da sessão anterior ---
@@ -1882,7 +1969,13 @@ class AudioLoop:
 
 
                 # --- Tenta conectar ---
-                print(f"Tentando conectar ao Gemini (Tentativa {attempt+1})...")
+                # Verifica se o cliente Gemini foi inicializado com sucesso
+                if client is None:
+                    logger.info("ERRO: Cliente Gemini não inicializado. Não é possível conectar.")
+                    self.stop_event.set()
+                    break
+
+                logger.info("Tentando conectar ao Gemini (Tentativa {attempt+1})...")
                 async with client.aio.live.connect(model=MODEL, config=CONFIG) as session:
                     self.session = session
                     session_id_str = 'N/A'
@@ -1892,7 +1985,7 @@ class AudioLoop:
                     elif hasattr(session, '_session_id'): # Tenta atributo privado como fallback
                          session_id_str = session._session_id
 
-                    print(f"Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {session_id_str}")
+                    logger.info("Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {session_id_str}")
                     attempt = 0 # Reseta tentativas em caso de sucesso
 
                     # Recria filas para a nova sessão
@@ -1902,7 +1995,7 @@ class AudioLoop:
 
                     # --- Inicia todas as tarefas da sessão ---
                     async with asyncio.TaskGroup() as tg:
-                        print("Iniciando tarefas da sessão...")
+                        logger.info("Iniciando tarefas da sessão...")
                         # Tarefa para ler input de texto do console
                         tg.create_task(self.send_text(), name="send_text_task")
                         # Tarefa para enviar dados (áudio/vídeo) da out_queue para Gemini
@@ -1922,38 +2015,38 @@ class AudioLoop:
                         # Tarefa para tocar áudio recebido do Gemini (se PyAudio estiver ok)
                         if pya: tg.create_task(self.play_audio(), name="play_audio_task")
 
-                        print("Todas as tarefas da sessão iniciadas. Aguardando conclusão ou parada...")
+                        logger.info("Todas as tarefas da sessão iniciadas. Aguardando conclusão ou parada...")
                     # O bloco `async with tg:` espera todas as tarefas terminarem
 
-                    print("TaskGroup da sessão finalizado.")
+                    logger.info("TaskGroup da sessão finalizado.")
                     # Se o TaskGroup terminou sem o stop_event ser setado,
                     # significa que a sessão Gemini provavelmente fechou ou uma tarefa crítica falhou.
                     if not self.stop_event.is_set():
-                         print("Sessão Gemini terminou inesperadamente ou TaskGroup concluído. Tentando reconectar...")
+                         logger.info("Sessão Gemini terminou inesperadamente ou TaskGroup concluído. Tentando reconectar...")
                          attempt += 1 # Incrementa para tentar reconectar
                     else:
                         # Se stop_event foi setado, saímos do loop principal
-                        print("Stop event detectado após TaskGroup. Encerrando loop de conexão.")
+                        logger.info("Stop event detectado após TaskGroup. Encerrando loop de conexão.")
                         break
 
 
             except asyncio.CancelledError:
-                print("Loop principal (run) cancelado.")
+                logger.info("Loop principal (run) cancelado.")
                 self.stop_event.set() # Garante que o evento de parada seja definido
                 break
             except ExceptionGroup as eg:
                 # Erro vindo do TaskGroup (uma ou mais tarefas falharam)
-                print(f"Erro(s) no TaskGroup (Tentativa {attempt+1}):")
+                logger.error("(s) no TaskGroup (Tentativa {attempt+1}):")
                 self.stop_event.set() # Para tudo se uma tarefa falhar criticamente
                 for i, exc in enumerate(eg.exceptions):
-                    print(f"  Erro {i+1}: {type(exc).__name__} - {exc}")
+                    logger.info("  Erro {i+1}: {type(exc).__name__} - {exc}")
                     # Imprime traceback para cada exceção no grupo
                     # traceback.print_exception(type(exc), exc, exc.__traceback__)
                 attempt += 1 # Tenta reconectar após falha no TaskGroup
                 self.session = None # Garante que a sessão seja considerada inválida
             except Exception as e:
                 # Erro durante a conexão inicial ou outro erro inesperado no loop run
-                print(f"Erro ao conectar ou erro inesperado no método run (Tentativa {attempt+1}): {type(e).__name__} - {e}")
+                logger.error(" ao conectar ou erro inesperado no método run (Tentativa {attempt+1}): {type(e).__name__} - {e}")
                 traceback.print_exc() # Imprime traceback completo
 
                 # Verifica se o erro é relacionado à conexão/sessão para decidir se retenta
@@ -1963,38 +2056,38 @@ class AudioLoop:
                     "RST_STREAM", "UNAVAILABLE", "DEADLINE_EXCEEDED",
                     "LIVESESSION CLOSED", "LIVESESSION NOT CONNECTED",
                     "CONNECTIONCLOSEDERROR", "GOAWAY", "INTERNALERROR",
-                    "FAILED TO ESTABLISH CONNECTION"
+                    "FAILED TO ESTABLISH CONNECTION", "AUTHENTICATION" # Adiciona erro de autenticação
                 ])
 
                 if is_connection_error:
-                    print(f"Detectado erro relacionado à sessão ou conexão Gemini: {e}")
+                    logger.info("Detectado erro relacionado à sessão ou conexão Gemini: {e}")
                 else:
-                    print("Erro não parece ser diretamente de conexão. Verifique o traceback.")
+                    logger.info("Erro não parece ser diretamente de conexão. Verifique o traceback.")
 
                 attempt += 1 # Incrementa tentativa
                 self.session = None # Garante que a sessão seja considerada inválida
                 if attempt > max_retries:
-                     print("Máximo de tentativas de reconexão atingido após erro. Encerrando.")
+                     logger.info("Máximo de tentativas de reconexão atingido após erro. Encerrando.")
                      self.stop_event.set() # Define parada após exceder retries
                      break # Sai do loop while
 
         # --- Fim do Loop de Conexão ---
         if not self.stop_event.is_set() and attempt > max_retries:
-             print("Não foi possível restabelecer a conexão com Gemini após múltiplas tentativas.")
+             logger.info("Não foi possível restabelecer a conexão com Gemini após múltiplas tentativas.")
              self.stop_event.set() # Garante que o evento de parada esteja definido
 
         # --- Limpeza Final ---
-        print("Iniciando limpeza final em AudioLoop.run()...")
+        logger.info("Iniciando limpeza final em AudioLoop.run()...")
         self.stop_event.set() # Garante que todas as tarefas saibam que devem parar
 
         # Fecha a sessão Gemini se ainda estiver ativa
         if self.session:
             try:
-                print("Fechando sessão LiveConnect ativa...")
+                logger.info("Fechando sessão LiveConnect ativa...")
                 await self.session.close()
-                print("Sessão LiveConnect fechada.")
+                logger.info("Sessão LiveConnect fechada.")
             except Exception as e_close_session:
-                print(f"Erro ao fechar sessão LiveConnect na limpeza final: {e_close_session}")
+                logger.error(" ao fechar sessão LiveConnect na limpeza final: {e_close_session}")
         self.session = None
 
         # Sinaliza para a tarefa play_audio parar (colocando None na fila)
@@ -2003,30 +2096,30 @@ class AudioLoop:
                 # Não espera se a fila estiver cheia, apenas tenta colocar
                 self.audio_in_queue.put_nowait(None)
             except asyncio.QueueFull:
-                print("Aviso: Não foi possível colocar None na audio_in_queue (cheia) durante a limpeza.")
+                logger.info("Aviso: Não foi possível colocar None na audio_in_queue (cheia) durante a limpeza.")
             except Exception as e_q_put:
-                print(f"Erro ao colocar None na audio_in_queue durante a limpeza: {e_q_put}")
+                logger.error(" ao colocar None na audio_in_queue durante a limpeza: {e_q_put}")
 
         # Fecha janelas OpenCV se estiverem ativas
         if self.preview_window_active:
-            print("Fechando janelas OpenCV...")
+            logger.info("Fechando janelas OpenCV...")
             try:
                 cv2.destroyAllWindows()
-                print("Janelas OpenCV destruídas no finally de run.")
+                logger.info("Janelas OpenCV destruídas no finally de run.")
             except Exception as e_cv_destroy_all:
-                 print(f"Aviso: erro ao tentar fechar janelas de preview na limpeza final: {e_cv_destroy_all}")
+                 logger.warning(": erro ao tentar fechar janelas de preview na limpeza final: {e_cv_destroy_all}")
             self.preview_window_active = False
 
         # Termina PyAudio
         if pya:
             try:
-                print("Terminando PyAudio...")
+                logger.info("Terminando PyAudio...")
                 # Não precisa chamar stop_stream/close aqui, pois play_audio/listen_audio já o fazem
                 pya.terminate()
-                print("Recursos de PyAudio liberados.")
+                logger.info("Recursos de PyAudio liberados.")
             except Exception as e_pya:
-                print(f"Erro ao terminar PyAudio: {e_pya}")
-        print("Limpeza de AudioLoop.run() concluída.")
+                logger.error(" ao terminar PyAudio: {e_pya}")
+        logger.info("Limpeza de AudioLoop.run() concluída.")
 
 
 # --- Ponto de Entrada Principal ---
@@ -2046,64 +2139,69 @@ if __name__ == "__main__":
     show_actual_preview = False
     if args.mode == "camera" and args.show_preview:
         show_actual_preview = True
-        print("Feedback visual da câmera (preview) ATIVADO.")
+        logger.info("Feedback visual da câmera (preview) ATIVADO.")
     elif args.mode != "camera" and args.show_preview:
-        print("Aviso: --show_preview só tem efeito com --mode camera. Ignorando.")
+        logger.info("Aviso: --show_preview só tem efeito com --mode camera. Ignorando.")
     else:
-        print("Feedback visual da câmera (preview) DESATIVADO.")
+        logger.info("Feedback visual da câmera (preview) DESATIVADO.")
 
 
     # Verifica se o modelo YOLO existe se o modo for camera
     if args.mode == "camera":
         if not os.path.exists(YOLO_MODEL_PATH):
-            print(f"ERRO CRÍTICO: Modelo YOLO '{YOLO_MODEL_PATH}' Não encontrado.")
-            print("Verifique o caminho em BaseDir e YOLO_MODEL_PATH ou baixe o modelo.")
+            logger.error(" CRÍTICO: Modelo YOLO '{YOLO_MODEL_PATH}' Não encontrado.")
+            logger.info("Verifique o caminho em BaseDir e YOLO_MODEL_PATH ou baixe o modelo.")
             exit(1) # Sai se o modelo não for encontrado
 
     # Verifica se PyAudio foi inicializado
     if not pya:
-         print("ERRO CRÍTICO: PyAudio não pôde ser inicializado.")
-         print("Verifique a instalação do PyAudio e suas dependências (como PortAudio).")
-         print("O programa não pode funcionar sem áudio. Encerrando.")
+         logger.info("ERRO CRÍTICO: PyAudio não pôde ser inicializado.")
+         logger.info("Verifique a instalação do PyAudio e suas dependências (como PortAudio).")
+         logger.info("O programa não pode funcionar sem áudio. Encerrando.")
          exit(1) # Sai se PyAudio falhou
+
+    # Verifica se o cliente Gemini foi inicializado
+    if client is None:
+        logger.info("ERRO CRÍTICO: Cliente Gemini não pôde ser inicializado (verifique API Key/conexão). Encerrando.")
+        exit(1)
 
     # Verifica se o arquivo de prompt foi carregado (system_instruction_text deve existir)
     if 'system_instruction_text' not in globals() or not system_instruction_text or system_instruction_text == "Você é um assistente prestativo.":
-         print("ERRO CRÍTICO: Falha ao carregar a instrução do sistema do arquivo.")
+         logger.info("AVISO: Falha ao carregar a instrução do sistema do arquivo ou arquivo não encontrado. Usando prompt padrão.")
          # Decide se quer continuar com o prompt padrão ou sair
          # exit(1) # Descomente para sair se o prompt for essencial
 
     main_loop = None
     try:
-        print(f"Iniciando Trackie no modo: {args.mode}")
+        logger.info("Iniciando Trackie no modo: {args.mode}")
         # Cria a instância principal
         main_loop = AudioLoop(video_mode=args.mode, show_preview=show_actual_preview)
         # Executa o loop principal assíncrono
         asyncio.run(main_loop.run())
 
     except KeyboardInterrupt:
-        print("\nInterrupção pelo teclado recebida (Ctrl+C). Encerrando...")
+        logger.info("\nInterrupção pelo teclado recebida (Ctrl+C). Encerrando...")
         if main_loop:
-            print("Sinalizando parada para as tarefas...")
+            logger.info("Sinalizando parada para as tarefas...")
             main_loop.stop_event.set()
             # Dê um pequeno tempo para as tarefas tentarem limpar antes de sair
             # time.sleep(1) # Opcional
     except Exception as e:
         # Captura qualquer outra exceção não tratada no nível superior
-        print(f"Erro inesperado e não tratado no bloco __main__: {type(e).__name__}: {e}")
+        logger.error(" inesperado e não tratado no bloco __main__: {type(e).__name__}: {e}")
         traceback.print_exc()
         if main_loop:
-            print("Sinalizando parada devido a erro inesperado...")
+            logger.info("Sinalizando parada devido a erro inesperado...")
             main_loop.stop_event.set()
     finally:
         # Este bloco sempre será executado, mesmo após interrupção ou erro
-        print("Bloco __main__ finalizado.")
+        logger.info("Bloco __main__ finalizado.")
         # Verifica se PyAudio ainda precisa ser terminado (caso run() não tenha chegado ao fim)
-        if pya and main_loop and not main_loop.stop_event.is_set(): # Se run não terminou normalmente
-             try:
-                 print("Tentando terminar PyAudio no finally do main...")
-                 pya.terminate()
-             except Exception as e_pya_final:
-                 print(f"Erro ao terminar PyAudio no finally do main: {e_pya_final}")
+        # if pya and main_loop and not main_loop.stop_event.is_set(): # Se run não terminou normalmente
+        #      try:
+        #          logger.info("Tentando terminar PyAudio no finally do main...")
+        #          pya.terminate()
+        #      except Exception as e_pya_final:
+        #          logger.error(" ao terminar PyAudio no finally do main: {e_pya_final}")
 
-        print("Programa completamente finalizado.")
+        logger.info("Programa completamente finalizado.")
