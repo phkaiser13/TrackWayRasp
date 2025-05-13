@@ -1571,9 +1571,8 @@ class AudioLoop:
                         
                         # Tentativa 1: Acesso direto (como no código original)
                         fc_object = getattr(response_chunk, "function_call", None)
-                        
-                        # Tentativa 2: Acesso via candidates (mais comum em APIs não-LiveConnect, mas vale verificar)
-                        if not fc_object and response_chunk.candidates:
+                        # Tentativa 2: Acesso via candidates (só se existir este atributo)
+                        if not fc_object and hasattr(response_chunk, "candidates") and response_chunk.candidates:
                             candidate = response_chunk.candidates[0]
                             if candidate.content and candidate.content.parts:
                                 part = candidate.content.parts[0]
