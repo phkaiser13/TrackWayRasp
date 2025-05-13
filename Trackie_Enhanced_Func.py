@@ -1851,7 +1851,6 @@ class AudioLoop:
             try:
                 # Tenta usar a taxa de amostragem do dispositivo padrão
                 out_device_info = pya.get_default_output_device_info()
-                output_rate = int(out_device_info.get('defaultSampleRate', RECEIVE_SAMPLE_RATE))
                 logger.info("Usando dispositivo de saída: {out_device_info['name']} @ {output_rate} Hz")
             except Exception as e_dev_info:
                 logger.info("Não foi possível obter info do dispositivo de saída padrão ({e_dev_info}). Usando taxa padrão: {output_rate} Hz")
