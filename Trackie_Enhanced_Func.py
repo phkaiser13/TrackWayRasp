@@ -1,6 +1,3 @@
-
-# 1. Importações e Dependências
-# Bibliotecas Padrão (stdlib)
 import os
 import asyncio
 import base64
@@ -16,6 +13,7 @@ logger = logging.getLogger(__name__)
 import traceback
 import time
 import argparse
+import json
 import threading
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -64,7 +62,8 @@ DEFAULT_MODE = "camera"
 BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
 
 # --- Caminho para o arquivo de prompt ---
-SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "trackiegem1.txt")
+SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.py")
+CONFIG_PATH = os.path.join(BaseDir, "UserSettings", "trckconfig.json")
 
 # YOLO
 YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolov8n.pt")
@@ -236,14 +235,14 @@ if not API_KEY:
         if os.path.exists(dotenv_path):
             load_dotenv(dotenv_path=dotenv_path)
             API_KEY = os.environ.get("GEMINI_API_KEY")
-            logger.info("Chave API carregada de: {dotenv_path}")
+            logger.info(f"Chave API carregada de: {dotenv_path}")
         else:
-             logger.info("Arquivo .env não encontrado em: {dotenv_path}")
+             logger.info(f"Arquivo .env não encontrado em: {dotenv_path}")
     except ImportError:
         logger.info("Biblioteca python-dotenv não instalada. Não é possível carregar .env.")
         pass
     except Exception as e_env:
-        logger.error(" ao carregar .env: {e_env}")
+        logger.error(f"Erro ao carregar .env: {e_env}")
 
 
 if not API_KEY:
@@ -256,54 +255,54 @@ if not API_KEY:
 # É ALTAMENTE RECOMENDADO usar a variável API_KEY carregada acima.
 try:
     client = genai.Client(
-        api_key="AIzaSyCOZU2M9mrAsx8aC4tYptfoSEwaJ3IuDZM", # <-- SUBSTITUA por API_KEY ou remova se API_KEY for None
+        api_key=os.getenv("GEMINI_API_KEY"), # <-- SUBSTITUA por API_KEY ou remova se API_KEY for None
         # api_key=API_KEY, # <-- Use esta linha em vez da acima se API_KEY for carregada
         http_options=types.HttpOptions(api_version='v1alpha')
     )
     logger.info("Cliente Gemini inicializado.")
 except Exception as e_client:
-    logger.error(" CRÍTICO ao inicializar cliente Gemini: {e_client}")
+    logger.error(f"ERRO CRÍTICO ao inicializar cliente Gemini: {e_client}")
     logger.info("Verifique a API Key e a conexão.")
     client = None # Define como None para indicar falha
     # exit(1) # Descomente para sair se o cliente for essencial
 
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
+        types.Tool(code_execution=types.ToolCodeExecution),
     types.Tool(google_search=types.GoogleSearch()),
-    types.Tool(code_execution=types.ToolCodeExecution()),
     types.Tool(
         function_declarations=[
             types.FunctionDeclaration(
                 name="save_known_face",
-                description="Salva o rosto da pessoa atualmente em foco pela câmera. Se 'person_name' não for fornecido na chamada inicial, a IA solicitará o nome ao usuário e aguardará uma nova entrada antes de prosseguir com o salvamento. Se 'person_name' for fornecido, o rosto é salvo diretamente.",
+                description="Salva o rosto da pessoa atualmente em foco pela câmera. Se 'person_name' não for fornecido, a IA deve solicitar o nome ao usuário com uma mensagem clara, como 'Por favor, informe o nome da pessoa para salvar o rosto.' Após receber o nome, a função salva o rosto e confirma o salvamento com 'Rosto salvo com sucesso para [nome].' Se a captura falhar, retorna 'Erro: Não foi possível capturar o rosto. Tente novamente.'",
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
                         "person_name": types.Schema(
                             type=types.Type.STRING,
-                            description="O nome da pessoa a ser salva. Se omitido na chamada inicial, a IA solicitará este nome ao usuário."
+                            description="Nome da pessoa a ser salvo. Se omitido, a IA deve solicitar ao usuário."
                         )
-                    },
+                    }
                 )
             ),
             types.FunctionDeclaration(
                 name="identify_person_in_front",
-                description="Identifica a pessoa atualmente em foco pela camera usando o banco de dados de rostos conhecidos (DB_PATH/known_faces), Deve ser chamado somente quando a pessoa deixar claro de forma explicita que ela quer identificar alguma pessoa/rosto, somente!",
+                description="Identifica a pessoa atualmente em foco pela câmera usando o banco de dados de rostos conhecidos. Deve ser chamado apenas quando o usuário expressa explicitamente a intenção de identificar uma pessoa. Se múltiplos rostos forem detectados, retorna o mais próximo. Inclui a confiança da identificação (ex: 'Identificado como [nome] com 95% de confiança.'). Se não houver correspondência, retorna 'Pessoa não reconhecida.'",
                 parameters=types.Schema(type=types.Type.OBJECT, properties={})
             ),
             types.FunctionDeclaration(
                 name="find_object_and_estimate_distance",
-                description="Localiza um objeto específico descrito pelo usuário na visão da câmera, usando detecção de objetos (YOLO) e estima sua distância em passos usando um modelo de profundidade (MiDaS). Informa também se o objeto está sobre uma superfície como uma mesa e sua direção relativa (frente, esquerda, direita).",
+                description="Localiza um objeto específico na visão da câmera usando detecção de objetos (YOLO) e estima sua distância em passos com MiDaS. O 'object_type' deve ser uma das categorias do modelo YOLO (ex: 'person', 'car', 'bottle'). Retorna a direção (frente, esquerda, direita), se está sobre uma superfície (ex: mesa), e a distância estimada. Se o objeto não for encontrado, retorna 'Objeto não encontrado na cena.'",
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
                         "object_description": types.Schema(
                             type=types.Type.STRING,
-                            description="A descrição completa do objeto fornecida pelo usuário (ex: 'computador azul', 'chave de fenda preta')."
+                            description="Descrição completa do objeto (ex: 'garrafa azul')."
                         ),
                         "object_type": types.Schema(
                             type=types.Type.STRING,
-                            description="O tipo principal do objeto identificado pelo modelo a partir da descrição (ex: 'computador', 'chave de fenda', 'garrafa'). Usado para filtrar detecções."
+                            description="Tipo principal do objeto (ex: 'bottle'). Deve ser uma categoria válida do modelo YOLO."
                         )
                     },
                     required=["object_description", "object_type"]
@@ -317,13 +316,13 @@ tools = [
 system_instruction_text = "Você é um assistente prestativo." # Prompt padrão mínimo
 try:
     if not os.path.exists(SYSTEM_INSTRUCTION_PATH):
-         logger.warning(": Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'. Usando prompt padrão.")
+         logger.warning(f"AVISO: Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'. Usando prompt padrão.")
     else:
         with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
             system_instruction_text = f.read()
-        logger.info("Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
+        logger.info(f"Instrução do sistema carregada de: {SYSTEM_INSTRUCTION_PATH}")
 except Exception as e:
-    logger.error(" ao ler o arquivo de instrução do sistema: {e}")
+    logger.error(f"Erro ao ler o arquivo de instrução do sistema: {e}")
     logger.info("Usando um prompt padrão mínimo.")
     traceback.print_exc()
 
@@ -331,7 +330,7 @@ except Exception as e:
 # --- Configuração da Sessão LiveConnect Gemini ---
 CONFIG = types.LiveConnectConfig(
     temperature=0,
-    response_modalities=["audio"],
+    response_modalities=["audio"], # AJUSTADO: Corrigido para ser uma lista de strings
     speech_config=types.SpeechConfig(
         language_code="pt-BR",
         voice_config=types.VoiceConfig(
@@ -341,7 +340,7 @@ CONFIG = types.LiveConnectConfig(
     tools=tools,
     system_instruction=types.Content(
         parts=[types.Part.from_text(text=system_instruction_text)], # <-- Usa o texto carregado do arquivo
-        role="user"
+        role="system"
     ),
 )
 
@@ -349,7 +348,7 @@ CONFIG = types.LiveConnectConfig(
 try:
     pya = pyaudio.PyAudio()
 except Exception as e:
-    logger.error(" ao inicializar PyAudio: {e}. O áudio não funcionará.")
+    logger.error(f"Erro ao inicializar PyAudio: {e}. O áudio não funcionará.")
     pya = None
 
 # --- Classe Principal do Assistente ---
@@ -358,6 +357,13 @@ class AudioLoop:
     Gerencia o loop principal do assistente multimodal.
     """
     def __init__(self, video_mode: str = DEFAULT_MODE, show_preview: bool = False):
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            self.trckuser = cfg.get("trckuser", "Usuário")
+        except Exception as e:
+            logger.warning(f"Não foi possível ler {CONFIG_PATH}: {e}")
+            self.trckuser = "Usuário"        
         self.video_mode = video_mode
         self.show_preview = show_preview if video_mode == "camera" else False
         self.audio_in_queue: Optional[asyncio.Queue] = None
@@ -380,21 +386,21 @@ class AudioLoop:
         if self.video_mode == "camera":
             try:
                 self.yolo_model = YOLO(YOLO_MODEL_PATH)
-                logger.info("Modelo YOLO '{YOLO_MODEL_PATH}' carregado.")
+                logger.info(f"Modelo YOLO '{YOLO_MODEL_PATH}' carregado.")
             except FileNotFoundError:
-                 logger.error(": Modelo YOLO não encontrado em '{YOLO_MODEL_PATH}'. YOLO desabilitado.")
+                 logger.error(f"ERRO: Modelo YOLO não encontrado em '{YOLO_MODEL_PATH}'. YOLO desabilitado.")
                  self.yolo_model = None
             except Exception as e:
-                logger.error(" ao carregar o modelo YOLO: {e}. YOLO desabilitado.")
+                logger.error(f"Erro ao carregar o modelo YOLO: {e}. YOLO desabilitado.")
                 traceback.print_exc()
                 self.yolo_model = None
 
         if not os.path.exists(DB_PATH):
             try:
                 os.makedirs(DB_PATH)
-                logger.info("Diretório DeepFace DB criado em: {DB_PATH}")
+                logger.info(f"Diretório DeepFace DB criado em: {DB_PATH}")
             except Exception as e:
-                logger.error(" ao criar diretório {DB_PATH}: {e}")
+                logger.error(f"Erro ao criar diretório {DB_PATH}: {e}")
 
         try:
             logger.info("Pré-carregando modelos DeepFace...")
@@ -404,14 +410,14 @@ class AudioLoop:
             DeepFace.analyze(img_path=dummy_frame, actions=['emotion'], enforce_detection=False)
             logger.info("Modelos DeepFace pré-carregados.")
         except Exception as e:
-            logger.warning(": Erro ao pré-carregar modelos DeepFace: {e}.")
+            logger.warning(f"AVISO: Erro ao pré-carregar modelos DeepFace: {e}.")
             # traceback.print_exc() # Descomente se precisar depurar o pré-carregamento
 
         self.midas_model = None
         self.midas_transform = None
         self.midas_device = "cuda" if torch.cuda.is_available() else "cpu"
         try:
-            logger.info("Carregando modelo MiDaS ({MIDAS_MODEL_TYPE}) para {self.midas_device}...")
+            logger.info(f"Carregando modelo MiDaS ({MIDAS_MODEL_TYPE}) para {self.midas_device}...")
             # Carrega o modelo MiDaS do Torch Hub
             self.midas_model = torch.hub.load("intel-isl/MiDaS", MIDAS_MODEL_TYPE)
             # Carrega as transformações correspondentes
@@ -427,7 +433,7 @@ class AudioLoop:
             self.midas_model.eval()
             logger.info("Modelo MiDaS carregado.")
         except Exception as e:
-            logger.error(" ao carregar modelo MiDaS: {e}. Estimativa de profundidade desabilitada.")
+            logger.error(f"Erro ao carregar modelo MiDaS: {e}. Estimativa de profundidade desabilitada.")
             # traceback.print_exc() # Descomente para depurar o carregamento do MiDaS
             self.midas_model = None
             self.midas_transform = None
@@ -440,6 +446,11 @@ class AudioLoop:
             try:
                 # Lê input do usuário em uma thread separada para não bloquear asyncio
                 text = await asyncio.to_thread(input, "message > ")
+                if self.out_queue:
+                    while not self.out_queue.empty():
+                        self.out_queue.get_nowait()
+                        self.out_queue.task_done()
+                        
 
                 # --- Tratamento de Comandos Locais/Debug ---
                 if text.lower() == "q":
@@ -457,9 +468,9 @@ class AudioLoop:
                             # self.thinking_event.set()
                             logger.info("  [DEBUG] Chamando _handle_save_known_face('pedro')...")
                             result = await asyncio.to_thread(self._handle_save_known_face, "pedro")
-                            logger.info("  [DEBUG] Resultado do salvamento direto: {result}")
+                            logger.info(f"  [DEBUG] Resultado do salvamento direto: {result}")
                         except Exception as e_debug_save:
-                            logger.info("  [DEBUG] Erro ao tentar salvar rosto diretamente: {e_debug_save}")
+                            logger.info(f"  [DEBUG] Erro ao tentar salvar rosto diretamente: {e_debug_save}")
                             traceback.print_exc()
                         # finally:
                             # self.thinking_event.clear()
@@ -470,7 +481,7 @@ class AudioLoop:
                 # --- Envio Normal para Gemini ---
                 # Verifica se a sessão existe e está ativa antes de enviar
                 if self.session:
-                    logger.info("Enviando texto para Gemini: '{text}'")
+                    logger.info(f"Enviando texto para Gemini: '{text}'")
                     # Envia o texto para o Gemini, marcando o fim do turno do usuário
                     # Envia "." se o texto estiver vazio para manter a sessão ativa
                     await self.session.send(input=text or ".", end_of_turn=True)
@@ -479,12 +490,13 @@ class AudioLoop:
                     if not self.stop_event.is_set():
                         logger.info("Sessão Gemini não está ativa. Não é possível enviar mensagem.")
                         await asyncio.sleep(0.5) # Evita spamming da mensagem
+                        
 
             except asyncio.CancelledError:
                 logger.info("send_text cancelado.")
                 break
             except Exception as e:
-                logger.error(" em send_text: {e}")
+                logger.error(f"Erro em send_text: {e}")
                 # Adiciona traceback para depuração em caso de erro inesperado
                 # traceback.print_exc()
                 # Verifica se o erro indica sessão fechada para parar
@@ -535,7 +547,7 @@ class AudioLoop:
                         if is_dangerous and conf >= YOLO_CONFIDENCE_THRESHOLD:
                             yolo_alerts.append(class_name_yolo)
             except Exception as e:
-                logger.error(" na inferência YOLO: {e}")
+                logger.error(f"Erro na inferência YOLO: {e}")
                 # traceback.print_exc() # Descomente para depuração detalhada do YOLO
                 current_yolo_results = None
         elif self.show_preview and ret:
@@ -564,10 +576,10 @@ class AudioLoop:
                     self.show_preview = False
                     self.preview_window_active = False
                 else:
-                    logger.error(" inesperado no OpenCV ao tentar mostrar preview: {e}")
+                    logger.error(f"Erro inesperado no OpenCV ao tentar mostrar preview: {e}")
                     # traceback.print_exc() # Descomente para depuração detalhada do OpenCV
             except Exception as e_gen:
-                logger.error(" geral ao tentar mostrar preview: {e_gen}")
+                logger.error(f"Erro geral ao tentar mostrar preview: {e_gen}")
                 # traceback.print_exc() # Descomente para depuração detalhada
                 self.show_preview = False
                 self.preview_window_active = False
@@ -587,7 +599,7 @@ class AudioLoop:
                     "data": base64.b64encode(image_io.read()).decode('utf-8')
                 }
             except Exception as e:
-                logger.error(" na conversão do frame para JPEG: {e}")
+                logger.error(f"Erro na conversão do frame para JPEG: {e}")
                 # traceback.print_exc() # Descomente para depuração detalhada
 
         return image_part, list(set(yolo_alerts))
@@ -603,14 +615,14 @@ class AudioLoop:
             # Tenta definir FPS, mas não é garantido que funcione em todas as câmeras/drivers
             cap.set(cv2.CAP_PROP_FPS, target_fps)
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
-            logger.info("FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
+            logger.info(f"FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
 
             if actual_fps > 0 and actual_fps < target_fps * 5: # Usa FPS real se razoável
                 sleep_interval = 1 / actual_fps
             else:
                 sleep_interval = 1 / target_fps # Usa FPS alvo como fallback
             sleep_interval = max(0.1, min(sleep_interval, 1.0)) # Limita entre 0.1s e 1.0s
-            logger.info("Intervalo de captura de frame: {sleep_interval:.2f}s")
+            logger.info(f"Intervalo de captura de frame: {sleep_interval:.2f}s")
 
 
             if not cap.isOpened():
@@ -656,19 +668,19 @@ class AudioLoop:
                          # Isso não deveria acontecer se a lógica acima estiver correta, mas por segurança
                          pass # logger.info("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame.") # Log opcional
                     except Exception as q_e:
-                         logger.error(" inesperado ao manipular out_queue em get_frames: {q_e}")
+                         logger.error(f"Erro inesperado ao manipular out_queue em get_frames: {q_e}")
 
 
                 # Envia alertas YOLO urgentes diretamente
                 if yolo_alerts and self.session:
                     for alert_class_name in yolo_alerts:
                         try:
-                            alert_msg = f"Usuário, CUIDADO! {alert_class_name.upper()} detectado!"
+                            alert_msg = f"{self.trckuser}, CUIDADO! {alert_class_name.upper()} detectado!"
                             # Não precisa verificar out_queue aqui, pois envia direto
                             await self.session.send(input=alert_msg, end_of_turn=True)
-                            logger.info("ALERTA URGENTE ENVIADO: {alert_msg}")
+                            logger.info(f"ALERTA URGENTE ENVIADO: {alert_msg}")
                         except Exception as e:
-                            logger.error(" ao enviar alerta urgente: {e}")
+                            logger.error(f"Erro ao enviar alerta urgente: {e}")
                             if "LiveSession closed" in str(e) or "LiveSession not connected" in str(e):
                                 logger.info("Erro ao enviar alerta indica sessão fechada. Sinalizando parada.")
                                 self.stop_event.set()
@@ -680,7 +692,7 @@ class AudioLoop:
         except asyncio.CancelledError:
             logger.info("get_frames cancelado.")
         except Exception as e:
-            logger.error(" crítico em get_frames: {e}")
+            logger.error(f"Erro crítico em get_frames: {e}")
             traceback.print_exc() # Imprime traceback para erros críticos
             self.stop_event.set()
         finally:
@@ -704,7 +716,7 @@ class AudioLoop:
                         cv2.destroyAllWindows()
                         logger.info("Todas as janelas OpenCV fechadas.")
                     except Exception as e_cv_destroy_all:
-                        logger.warning(": erro ao tentar fechar janelas de preview no finally: {e_cv_destroy_all}")
+                        logger.warning(f"AVISO: erro ao tentar fechar janelas de preview no finally: {e_cv_destroy_all}")
             self.preview_window_active = False # Garante que o estado está correto
             logger.info("get_frames concluído.")
 
@@ -744,7 +756,7 @@ class AudioLoop:
                 "data": base64.b64encode(image_io.read()).decode('utf-8')
             }
         except Exception as e:
-            logger.error(" ao capturar tela: {e}")
+            logger.error(f"Erro ao capturar tela: {e}")
             # traceback.print_exc() # Descomente para depuração detalhada do mss
             return None
 
@@ -774,14 +786,14 @@ class AudioLoop:
                     except asyncio.QueueFull:
                          pass # logger.info("Aviso: Fila de saída ainda cheia ao tentar enfileirar frame de tela.") # Log opcional
                     except Exception as q_e:
-                         logger.error(" inesperado ao manipular out_queue em get_screen: {q_e}")
+                         logger.error(f"Erro inesperado ao manipular out_queue em get_screen: {q_e}")
 
                 # Espera 1 segundo entre capturas de tela
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             logger.info("get_screen cancelado.")
         except Exception as e:
-            logger.error(" crítico em get_screen: {e}")
+            logger.error(f"Erro crítico em get_screen: {e}")
             traceback.print_exc() # Imprime traceback para erros críticos
             self.stop_event.set()
         finally:
@@ -814,7 +826,7 @@ class AudioLoop:
                     continue
                 except Exception as q_get_e:
                     # Erro inesperado ao obter da fila
-                    logger.error(" ao obter da out_queue em send_realtime: {q_get_e}")
+                    logger.error(f"Erro ao obter da out_queue em send_realtime: {q_get_e}")
                     await asyncio.sleep(0.1)
                     continue
 
@@ -830,18 +842,22 @@ class AudioLoop:
                 # Tenta enviar a mensagem para o Gemini
                 try:
                     if isinstance(msg, dict) and "data" in msg and "mime_type" in msg : # Mensagem multimodal (imagem/áudio)
-                        await self.session.send(input=msg)
-                    elif isinstance(msg, str): # Mensagem de texto (raro neste fluxo, usado para alertas)
-                        logger.info("Enviando texto via send_realtime (raro): {msg}")
-                        await self.session.send(input=msg, end_of_turn=False) # end_of_turn=False para não interromper fluxo normal
+                        await self.session.send(input=msg, end_of_turn=True)
+                    elif isinstance(msg, str): # Mensagem de texto (raro neste fluxo)
+                        # AJUSTADO: end_of_turn=True para garantir que o modelo processe como um turno completo
+                        # se uma string chegar aqui (ex: alerta sistêmico ou, hipoteticamente, msg de usuário perdida).
+                        # Inputs de usuário normais são via send_text (com end_of_turn=True).
+                        # Alertas YOLO são enviados de get_frames (com end_of_turn=True).
+                        logger.info(f"Enviando texto via send_realtime (tratando como turno completo): {msg}")
+                        await self.session.send(input=msg, end_of_turn=True)
                     else:
-                        logger.info("Mensagem desconhecida em send_realtime: {type(msg)}")
+                        logger.info(f"Mensagem desconhecida em send_realtime: {type(msg)}")
 
                     # Marca a tarefa como concluída na fila após envio bem-sucedido
                     if self.out_queue: self.out_queue.task_done()
 
                 except Exception as e_send:
-                    logger.error(" ao enviar para Gemini em send_realtime: {e_send}")
+                    logger.error(f"Erro ao enviar para Gemini em send_realtime: {e_send}")
                     # Garante task_done mesmo em erro para não bloquear a fila
                     if self.out_queue: self.out_queue.task_done()
                     # Verifica se o erro indica sessão fechada/perdida
@@ -862,7 +878,7 @@ class AudioLoop:
         except asyncio.CancelledError:
             logger.info("send_realtime cancelado.")
         except Exception as e:
-            logger.error(" fatal em send_realtime: {e}")
+            logger.error(f"Erro fatal em send_realtime: {e}")
             traceback.print_exc() # Imprime traceback para erros fatais
             self.stop_event.set()
         finally:
@@ -879,7 +895,7 @@ class AudioLoop:
         try:
             logger.info("Configurando stream de áudio de entrada...")
             mic_info = pya.get_default_input_device_info()
-            logger.info("Usando microfone: {mic_info['name']}")
+            logger.info(f"Usando microfone: {mic_info['name']}")
             audio_stream = await asyncio.to_thread(
                 pya.open,
                 format=FORMAT, channels=CHANNELS, rate=SEND_SAMPLE_RATE,
@@ -918,23 +934,23 @@ class AudioLoop:
                          except asyncio.QueueFull:
                              pass # logger.info("Aviso: Fila de saída cheia ao tentar enfileirar áudio.")
                          except Exception as q_e:
-                              logger.error(" inesperado ao manipular out_queue em listen_audio: {q_e}")
+                              logger.error(f"Erro inesperado ao manipular out_queue em listen_audio: {q_e}")
 
                 except OSError as e_os:
                     # Erros comuns de stream fechado ou overflow
                     if e_os.errno == -9988 or "Stream closed" in str(e_os) or "Input overflowed" in str(e_os):
-                        logger.info("Stream de áudio fechado ou com overflow (OSError: {e_os}). Encerrando listen_audio.")
+                        logger.info(f"Stream de áudio fechado ou com overflow (OSError: {e_os}). Encerrando listen_audio.")
                         self.stop_event.set()
                         break
                     else:
                         # Outros erros de OS podem ser mais sérios
-                        logger.error(" de OS ao ler do stream de áudio: {e_os}")
+                        logger.error(f"Erro de OS ao ler do stream de áudio: {e_os}")
                         traceback.print_exc()
                         self.stop_event.set()
                         break
                 except Exception as e_read:
                     # Erro genérico durante a leitura
-                    logger.error(" durante a leitura do áudio em listen_audio: {e_read}")
+                    logger.error(f"Erro durante a leitura do áudio em listen_audio: {e_read}")
                     traceback.print_exc()
                     self.stop_event.set() # Para a tarefa em caso de erro de leitura
                     break
@@ -942,7 +958,7 @@ class AudioLoop:
             logger.info("listen_audio cancelado.")
         except Exception as e:
             # Erro crítico na configuração ou loop principal
-            logger.error(" crítico em listen_audio: {e}")
+            logger.error(f"Erro crítico em listen_audio: {e}")
             traceback.print_exc()
             self.stop_event.set()
         finally:
@@ -955,7 +971,7 @@ class AudioLoop:
                     audio_stream.close()
                     logger.info("Stream de áudio de entrada fechado.")
                 except Exception as e_close_stream:
-                    logger.error(" ao fechar stream de áudio de entrada: {e_close_stream}")
+                    logger.error(f"Erro ao fechar stream de áudio de entrada: {e_close_stream}")
             logger.info("listen_audio concluído.")
 
 
@@ -963,13 +979,13 @@ class AudioLoop:
         """Processa a chamada de função para salvar um rosto."""
         # --- LOGGING INÍCIO ---
         logger.info("[LOG] Executando: _handle_save_known_face")
-        logger.info("[LOG]   - Argumentos: person_name='{person_name}'")
+        logger.info(f"[LOG]   - Argumentos: person_name='{person_name}'")
         # --- FIM LOGGING ---
 
         start_time = time.time()
         result_message = "" # Inicializa a mensagem de resultado
 
-        logger.info("[DeepFace] Iniciando salvamento para: {person_name}")
+        logger.info(f"[DeepFace] Iniciando salvamento para: {person_name}")
         frame_to_process = None
         with self.frame_lock:
             if self.latest_bgr_frame is not None:
@@ -980,8 +996,8 @@ class AudioLoop:
             result_message = "Não foi possível capturar a imagem para salvar o rosto."
             # --- LOGGING FIM ---
             logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Sem frame)")
-            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            logger.info("[LOG]   - Resultado: '{result_message}'")
+            logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info(f"[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -993,7 +1009,7 @@ class AudioLoop:
         try:
             if not os.path.exists(person_dir):
                 os.makedirs(person_dir)
-                logger.info("[DeepFace] Diretório criado: {person_dir}")
+                logger.info(f"[DeepFace] Diretório criado: {person_dir}")
 
             # Extrai rosto(s) do frame
             detected_faces = DeepFace.extract_faces(
@@ -1006,12 +1022,12 @@ class AudioLoop:
 
             # Verifica se algum rosto foi detectado
             if not detected_faces or not isinstance(detected_faces, list) or 'facial_area' not in detected_faces[0]:
-                logger.info("[DeepFace] Nenhum rosto detectado para {person_name}.")
+                logger.info(f"[DeepFace] Nenhum rosto detectado para {person_name}.")
                 result_message = f"Não consegui detectar um rosto claro para {person_name}."
                 # --- LOGGING FIM ---
                 logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Rosto não detectado)")
-                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                logger.info("[LOG]   - Resultado: '{result_message}'")
+                logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info(f"[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -1026,12 +1042,12 @@ class AudioLoop:
             face_image = frame_to_process[y1:y2, x1:x2]
 
             if face_image.size == 0:
-                 logger.info("[DeepFace] Erro ao recortar rosto para {person_name} (imagem vazia).")
+                 logger.info(f"[DeepFace] Erro ao recortar rosto para {person_name} (imagem vazia).")
                  result_message = f"Erro ao processar o rosto de {person_name}."
                  # --- LOGGING FIM ---
                  logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Recorte vazio)")
-                 logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                 logger.info("[LOG]   - Resultado: '{result_message}'")
+                 logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                 logger.info(f"[LOG]   - Resultado: '{result_message}'")
                  # --- FIM LOGGING ---
                  return result_message
 
@@ -1045,12 +1061,12 @@ class AudioLoop:
             # Salva a imagem do rosto
             save_success = cv2.imwrite(file_path, face_image)
             if not save_success:
-                logger.info("[DeepFace] Erro ao salvar imagem em {file_path}")
+                logger.info(f"[DeepFace] Erro ao salvar imagem em {file_path}")
                 result_message = f"Erro ao salvar a imagem do rosto de {person_name}."
                 # --- LOGGING FIM ---
                 logger.info("[LOG] Finalizado: _handle_save_known_face (Erro: Falha no imwrite)")
-                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                logger.info("[LOG]   - Resultado: '{result_message}'")
+                logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info(f"[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -1061,25 +1077,25 @@ class AudioLoop:
             if os.path.exists(representations_pkl_path):
                 try:
                     os.remove(representations_pkl_path)
-                    logger.info("[DeepFace] Cache de representações '{representations_pkl_path}' removido para atualização.")
+                    logger.info(f"[DeepFace] Cache de representações '{representations_pkl_path}' removido para atualização.")
                 except Exception as e_pkl:
-                    logger.info("[DeepFace] Aviso: Falha ao remover cache de representações: {e_pkl}")
+                    logger.info(f"[DeepFace] Aviso: Falha ao remover cache de representações: {e_pkl}")
 
-            logger.info("[DeepFace] Rosto de {person_name} salvo em {file_path}")
+            logger.info(f"[DeepFace] Rosto de {person_name} salvo em {file_path}")
             result_message = f"Rosto de {person_name} salvo com sucesso."
 
         except ValueError as ve: # Captura erro específico do DeepFace se enforce_detection=True falhar
-             logger.info("[DeepFace] Nenhum rosto detectado (ValueError) para {person_name}: {ve}")
+             logger.info(f"[DeepFace] Nenhum rosto detectado (ValueError) para {person_name}: {ve}")
              result_message = f"Não consegui detectar um rosto claro para salvar para {person_name}."
         except Exception as e:
-            logger.info("[DeepFace] Erro inesperado ao salvar rosto para {person_name}: {e}")
+            logger.info(f"[DeepFace] Erro inesperado ao salvar rosto para {person_name}: {e}")
             traceback.print_exc()
             result_message = f"Ocorreu um erro ao tentar salvar o rosto de {person_name}."
 
         # --- LOGGING FIM ---
         logger.info("[LOG] Finalizado: _handle_save_known_face")
-        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        logger.info("[LOG]   - Resultado: '{result_message}'")
+        logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info(f"[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
@@ -1099,8 +1115,8 @@ class AudioLoop:
             result_message = "Erro interno: dependência 'pandas' faltando para identificação."
             # --- LOGGING FIM ---
             logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem pandas)")
-            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            logger.info("[LOG]   - Resultado: '{result_message}'")
+            logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info(f"[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -1116,8 +1132,8 @@ class AudioLoop:
             result_message = "Não foi possível capturar a imagem para identificar."
             # --- LOGGING FIM ---
             logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Sem frame)")
-            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            logger.info("[LOG]   - Resultado: '{result_message}'")
+            logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info(f"[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -1143,8 +1159,8 @@ class AudioLoop:
                 result_message = "Não consegui reconhecer ninguém ou não detectei um rosto claro."
                 # --- LOGGING FIM ---
                 logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Nenhuma correspondência)")
-                logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                logger.info("[LOG]   - Resultado: '{result_message}'")
+                logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                logger.info(f"[LOG]   - Resultado: '{result_message}'")
                 # --- FIM LOGGING ---
                 return result_message
 
@@ -1165,12 +1181,12 @@ class AudioLoop:
                     if found_col:
                         distance_col_name = found_col
                     else:
-                        logger.info("[DeepFace] Erro: Coluna de distância '{distance_col_name}' ou similar não encontrada. Colunas: {df.columns.tolist()}")
+                        logger.info(f"[DeepFace] Erro: Coluna de distância '{distance_col_name}' ou similar não encontrada. Colunas: {df.columns.tolist()}")
                         result_message = "Erro ao processar resultado da identificação (coluna de distância)."
                         # --- LOGGING FIM ---
                         logger.info("[LOG] Finalizado: _handle_identify_person_in_front (Erro: Coluna distância)")
-                        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                        logger.info("[LOG]   - Resultado: '{result_message}'")
+                        logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                        logger.info(f"[LOG]   - Resultado: '{result_message}'")
                         # --- FIM LOGGING ---
                         return result_message
 
@@ -1184,7 +1200,7 @@ class AudioLoop:
             person_name = os.path.basename(os.path.dirname(best_match_identity_path))
             distance = best_match[distance_col_name]
 
-            logger.info("[DeepFace] Pessoa potencialmente identificada: {person_name} (Distância: {distance:.4f})")
+            logger.info(f"[DeepFace] Pessoa potencialmente identificada: {person_name} (Distância: {distance:.4f})")
 
             # Define limiares de distância (ajustar experimentalmente!)
             thresholds = {
@@ -1201,25 +1217,25 @@ class AudioLoop:
             if distance <= threshold:
                 result_message = f"A pessoa na sua frente parece ser {person_name}."
             else:
-                logger.info("[DeepFace] Distância {distance:.4f} > limiar ({threshold}). Não reconhecido com confiança.")
+                logger.info(f"[DeepFace] Distância {distance:.4f} > limiar ({threshold}). Não reconhecido com confiança.")
                 # Poderia retornar o nome com baixa confiança, ou uma mensagem genérica
                 result_message = "Não tenho certeza de quem é, mas detectei um rosto."
                 # result_message = f"Detectei um rosto, mas não tenho certeza. Pode ser {person_name}?"
 
         except ValueError as ve: # Captura erro se enforce_detection=True e nenhum rosto for encontrado
-            logger.info("[DeepFace] Erro (ValueError) ao identificar: {ve}")
+            logger.info(f"[DeepFace] Erro (ValueError) ao identificar: {ve}")
             result_message = "Não detectei um rosto claro para identificar."
         # except ImportError: # Já tratado no início da função
         #      pass
         except Exception as e:
-            logger.info("[DeepFace] Erro inesperado ao identificar: {e}")
+            logger.info(f"[DeepFace] Erro inesperado ao identificar: {e}")
             traceback.print_exc()
             result_message = "Ocorreu um erro ao tentar identificar a pessoa."
 
         # --- LOGGING FIM ---
         logger.info("[LOG] Finalizado: _handle_identify_person_in_front")
-        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        logger.info("[LOG]   - Resultado: '{result_message}'")
+        logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info(f"[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
@@ -1249,7 +1265,7 @@ class AudioLoop:
             depth_map = prediction.cpu().numpy()
             return depth_map
         except Exception as e:
-            logger.info("[MiDaS] Erro durante a inferência: {e}")
+            logger.info(f"[MiDaS] Erro durante a inferência: {e}")
             # traceback.print_exc() # Descomente para depuração detalhada do MiDaS
             return None
 
@@ -1260,7 +1276,7 @@ class AudioLoop:
         highest_conf = -1.0
         # Obtém a lista de nomes de classe YOLO correspondentes ao tipo de objeto pedido
         target_yolo_classes = YOLO_CLASS_MAP.get(object_type.lower(), [object_type.lower()])
-        # logger.info("[YOLO Match] Procurando por classes: {target_yolo_classes}") # Log opcional
+        # logger.info(f"[YOLO Match] Procurando por classes: {target_yolo_classes}") # Log opcional
 
         # Verifica se há resultados YOLO e se o modelo está carregado
         if not yolo_results or not self.yolo_model:
@@ -1291,7 +1307,7 @@ class AudioLoop:
                     if cls_id < len(self.yolo_model.names):
                         class_name = self.yolo_model.names[cls_id]
                     else:
-                        # logger.info("[YOLO Match] ID de classe inválido: {cls_id}") # Log opcional
+                        # logger.info(f"[YOLO Match] ID de classe inválido: {cls_id}") # Log opcional
                         continue # ID inválido
 
                     # Verifica se a classe detectada é uma das classes alvo
@@ -1304,7 +1320,7 @@ class AudioLoop:
                             coords = list(map(int, coords_tensor))
                             bbox_dict = {'x1': coords[0], 'y1': coords[1], 'x2': coords[2], 'y2': coords[3]}
                             best_match = (bbox_dict, conf, class_name)
-                            # logger.info("[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
+                            # logger.info(f"[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
 
         # Retorna a melhor correspondência encontrada (ou None)
         return best_match
@@ -1386,7 +1402,7 @@ class AudioLoop:
                         # (Poderia usar MiDaS aqui, mas complica)
 
                         if horizontally_aligned and vertically_aligned: # and reasonable_size:
-                            # logger.info("[Surface Check] Objeto em ({target_center_x},{target_bottom_y}) considerado sobre '{class_name}' em ({s_x1}-{s_x2}, {s_y1}-{s_y2})") # Log opcional
+                            # logger.info(f"[Surface Check] Objeto em ({target_center_x},{target_bottom_y}) considerado sobre '{class_name}' em ({s_x1}-{s_x2}, {s_y1}-{s_y2})") # Log opcional
                             return True # Encontrou uma superfície sob o objeto
         return False # Nenhuma superfície encontrada sob o objeto
 
@@ -1395,13 +1411,13 @@ class AudioLoop:
         """Processa a chamada de função para localizar um objeto e estimar distância."""
         # --- LOGGING INÍCIO ---
         logger.info("[LOG] Executando: _handle_find_object_and_estimate_distance")
-        logger.info("[LOG]   - Argumentos: object_description='{object_description}', object_type='{object_type}'")
+        logger.info(f"[LOG]   - Argumentos: object_description='{object_description}', object_type='{object_type}'")
         # --- FIM LOGGING ---
 
         start_time = time.time()
         result_message = ""
 
-        logger.info("[Localizar Objeto] Buscando por '{object_description}' (tipo: '{object_type}')...")
+        logger.info(f"[Localizar Objeto] Buscando por '{object_description}' (tipo: '{object_type}')...")
         frame_to_process = None
         yolo_results_for_frame = None
         frame_height, frame_width = 0, 0
@@ -1418,11 +1434,11 @@ class AudioLoop:
         # Verifica se temos um frame válido
         if frame_to_process is None or frame_width == 0 or frame_height == 0:
              logger.info("[Localizar Objeto] Erro: Nenhum frame válido disponível.")
-             result_message = f"Usuário, não estou enxergando nada no momento para localizar o {object_type}."
+             result_message = f"{self.trckuser}, não estou enxergando nada no momento para localizar o {object_type}."
              # --- LOGGING FIM ---
              logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem frame)")
-             logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-             logger.info("[LOG]   - Resultado: '{result_message}'")
+             logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+             logger.info(f"[LOG]   - Resultado: '{result_message}'")
              # --- FIM LOGGING ---
              return result_message
 
@@ -1430,11 +1446,11 @@ class AudioLoop:
         if not yolo_results_for_frame:
             logger.info("[Localizar Objeto] Erro: Nenhum resultado YOLO disponível para o frame atual.")
             # Isso pode acontecer se o YOLO falhou ou ainda não processou o frame
-            result_message = f"Usuário, não consegui processar a imagem a tempo para encontrar o {object_type}."
+            result_message = f"{self.trckuser}, não consegui processar a imagem a tempo para encontrar o {object_type}."
             # --- LOGGING FIM ---
             logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Erro: Sem resultados YOLO)")
-            logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-            logger.info("[LOG]   - Resultado: '{result_message}'")
+            logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+            logger.info(f"[LOG]   - Resultado: '{result_message}'")
             # --- FIM LOGGING ---
             return result_message
 
@@ -1443,28 +1459,28 @@ class AudioLoop:
 
         # Fallback: Se não encontrou pelo tipo, tenta pela última palavra da descrição
         if not best_yolo_match:
-            logger.info("[Localizar Objeto] Nenhum objeto do tipo '{object_type}' encontrado. Tentando fallback com descrição...")
+            logger.info(f"[Localizar Objeto] Nenhum objeto do tipo '{object_type}' encontrado. Tentando fallback com descrição...")
             last_word = object_description.split(" ")[-1].lower()
             # Evita tentar o mesmo tipo duas vezes se type já era a última palavra
             if last_word != object_type.lower():
                 target_yolo_classes_fallback = YOLO_CLASS_MAP.get(last_word, [last_word])
-                logger.info("[Localizar Objeto] Fallback: Buscando por classes: {target_yolo_classes_fallback}")
+                logger.info(f"[Localizar Objeto] Fallback: Buscando por classes: {target_yolo_classes_fallback}")
                 best_yolo_match = self._find_best_yolo_match(last_word, yolo_results_for_frame)
 
             # Se ainda não encontrou após o fallback
             if not best_yolo_match:
-                 logger.info("[Localizar Objeto] Objeto '{object_description}' não encontrado mesmo com fallback.")
-                 result_message = f"Usuário, não consegui encontrar um(a) {object_description} na imagem."
+                 logger.info(f"[Localizar Objeto] Objeto '{object_description}' não encontrado mesmo com fallback.")
+                 result_message = f"{self.trckuser}, não consegui encontrar um(a) {object_description} na imagem."
                  # --- LOGGING FIM ---
                  logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance (Não encontrado)")
-                 logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-                 logger.info("[LOG]   - Resultado: '{result_message}'")
+                 logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+                 logger.info(f"[LOG]   - Resultado: '{result_message}'")
                  # --- FIM LOGGING ---
                  return result_message
 
         # Se encontrou um objeto
         target_bbox, confidence, detected_class = best_yolo_match
-        logger.info("[Localizar Objeto] Melhor correspondência YOLO: Classe '{detected_class}', Conf: {confidence:.2f}, BBox: {target_bbox}")
+        logger.info(f"[Localizar Objeto] Melhor correspondência YOLO: Classe '{detected_class}', Conf: {confidence:.2f}, BBox: {target_bbox}")
 
         # Verifica se está sobre uma superfície
         is_on_surface = self._check_if_on_surface(target_bbox, yolo_results_for_frame)
@@ -1512,13 +1528,13 @@ class AudioLoop:
                     estimated_meters = max(0.5, min(estimated_meters, 20))
                     # Converte metros para passos
                     distance_steps = max(1, round(estimated_meters / METERS_PER_STEP)) # Garante pelo menos 1 passo
-                    logger.info("[Localizar Objeto] Profundidade MiDaS no centro ({center_y},{center_x}): {depth_value:.4f}, Metros Estimados (heurístico): {estimated_meters:.2f}, Passos: {distance_steps}")
+                    logger.info(f"[Localizar Objeto] Profundidade MiDaS no centro ({center_y},{center_x}): {depth_value:.4f}, Metros Estimados (heurístico): {estimated_meters:.2f}, Passos: {distance_steps}")
                 else:
                      logger.info("[Localizar Objeto] Valor de profundidade MiDaS inválido ou muito baixo no centro do objeto.")
             except IndexError:
-                logger.info("[Localizar Objeto] Erro: Coordenadas ({center_y},{center_x}) fora dos limites do mapa de profundidade ({depth_map.shape}).")
+                logger.info(f"[Localizar Objeto] Erro: Coordenadas ({center_y},{center_x}) fora dos limites do mapa de profundidade ({depth_map.shape}).")
             except Exception as e_depth:
-                logger.info("[Localizar Objeto] Erro ao extrair/processar profundidade do MiDaS: {e_depth}")
+                logger.info(f"[Localizar Objeto] Erro ao extrair/processar profundidade do MiDaS: {e_depth}")
                 # traceback.print_exc() # Descomente para depuração
                 distance_steps = -1 # Reseta se houve erro
         # else: MiDaS não disponível ou falhou, distance_steps continua -1
@@ -1527,7 +1543,7 @@ class AudioLoop:
         # Usa a descrição original do usuário para a resposta
         object_name_for_response = object_description
 
-        response_parts = [f"Usuário, o {object_name_for_response} está"]
+        response_parts = [f"{self.trckuser}, o {object_name_for_response} está"]
         if surface_msg:
             response_parts.append(surface_msg) # Adiciona "sobre uma superfície..."
 
@@ -1549,13 +1565,13 @@ class AudioLoop:
                 result_message = " ".join(response_parts) + "."
         else:
             # Caso muito raro onde só temos a direção (sem distância e sem superfície)
-            result_message = f"Usuário, o {object_name_for_response} está {direction}."
+            result_message = f"{self.trckuser}, o {object_name_for_response} está {direction}."
 
 
         # --- LOGGING FIM ---
         logger.info("[LOG] Finalizado: _handle_find_object_and_estimate_distance")
-        logger.info("[LOG]   - Duração: {time.time() - start_time:.2f}s")
-        logger.info("[LOG]   - Resultado: '{result_message}'")
+        logger.info(f"[LOG]   - Duração: {time.time() - start_time:.2f}s")
+        logger.info(f"[LOG]   - Resultado: '{result_message}'")
         # --- FIM LOGGING ---
         return result_message
 
@@ -1591,6 +1607,11 @@ class AudioLoop:
                     # esta tarefa pode bloquear indefinidamente. A detecção de erros
                     # abaixo (LiveSession closed, etc.) mitiga isso parcialmente.
                     async for response_part in self.session.receive():
+                        if self.stop_event.is_set():
+                            break
+                        if has_received_data_in_turn and response_part.text:
+                            logger.info("Descartando texto antigo para nova entrada.")
+                            continue
                         has_received_data_in_turn = True
 
                         if self.stop_event.is_set():
@@ -1611,10 +1632,10 @@ class AudioLoop:
                             user_provided_name = None
                             if response_part.text: # Gemini transcreveu fala ou usuário digitou
                                 user_provided_name = response_part.text.strip()
-                                logger.info("[Trackie] Recebido texto enquanto aguardava nome: '{user_provided_name}'")
+                                logger.info(f"[Trackie] Recebido texto enquanto aguardava nome: '{user_provided_name}'")
 
                             if user_provided_name:
-                                logger.info("[Trackie] Processando nome '{user_provided_name}' para salvar rosto...")
+                                logger.info(f"[Trackie] Processando nome '{user_provided_name}' para salvar rosto...")
                                 self.awaiting_name_for_save_face = False # Reseta a flag
 
                                 original_function_name_pending = "save_known_face" # Nome da função original
@@ -1623,20 +1644,20 @@ class AudioLoop:
                                 self.thinking_event.set() # Pausa envio de dados
 
                                 # Feedback de voz ANTES de executar a função
-                                voice_feedback_msg = f"Usuário, salvando rosto de {user_provided_name}, um momento..."
+                                voice_feedback_msg = f"{self.trckuser}, salvando rosto de {user_provided_name}, um momento..."
                                 if self.session:
                                     try:
                                         # Envia feedback e termina o turno da IA para que ela fale
                                         await self.session.send(input=voice_feedback_msg, end_of_turn=True)
-                                        logger.info("  [Feedback Enviado]: {voice_feedback_msg}")
+                                        logger.info(f"  [Feedback Enviado]: {voice_feedback_msg}")
                                     except Exception as e_feedback:
-                                        logger.error(" ao enviar feedback de voz (awaiting name): {e_feedback}")
+                                        logger.error(f"Erro ao enviar feedback de voz (awaiting name): {e_feedback}")
 
                                 # Executa a função síncrona em outra thread
                                 result_message = await asyncio.to_thread(self._handle_save_known_face, user_provided_name)
 
                                 # Envia o resultado da função de volta para o Gemini
-                                logger.info("  [Trackie] Resultado da Função '{original_function_name_pending}': {result_message}")
+                                logger.info(f"  [Trackie] Resultado da Função '{original_function_name_pending}': {result_message}")
                                 if self.session:
                                     try:
                                         await self.session.send(
@@ -1651,7 +1672,7 @@ class AudioLoop:
                                         )
                                         logger.info("  [Trackie] Resultado da função (awaiting name) enviado.")
                                     except Exception as e_send_fc_resp:
-                                        logger.error(" ao enviar FunctionResponse (awaiting name): {e_send_fc_resp}")
+                                        logger.error(f"Erro ao enviar FunctionResponse (awaiting name): {e_send_fc_resp}")
                                 else:
                                     logger.info("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função (awaiting name).")
 
@@ -1664,14 +1685,17 @@ class AudioLoop:
                         # --- Processa Texto da IA ---
                         if response_part.text:
                             # Imprime texto recebido do Gemini (pode ser parcial)
-                            logger.info("\n[Gemini Texto]: {response_part.text}", end="")
+                            # Usando print() diretamente para garantir que o 'end=""' funcione como esperado no console.
+                            print(f"\n[Gemini Texto]: {response_part.text}", end="")
+                            # logger.info(f"\n[Gemini Texto]: {response_part.text}", extra={'end': ''}) # Alternativa se o logger for configurado para lidar com 'end'
+
 
                         # --- Processa Chamada de Função ---
                         if getattr(response_part, "function_call", None):
                             fc = response_part.function_call
                             function_name = fc.name
                             args = {key: val for key, val in fc.args.items()}
-                            logger.info("\n[Gemini Function Call] Recebido: {function_name}, Args: {args}")
+                            logger.info(f"\n[Gemini Function Call] Recebido: {function_name}, Args: {args}")
 
                             result_message = None # Inicializa resultado
 
@@ -1685,9 +1709,9 @@ class AudioLoop:
                                 if self.session:
                                     try:
                                         # Envia a pergunta e termina o turno da IA
-                                        await self.session.send(input="Usuário, por favor forneça o nome da pessoa para salvar o rosto.", end_of_turn=True)
+                                        await self.session.send(input=f"{self.trckuser}, por favor forneça o nome da pessoa para salvar o rosto.", end_of_turn=True)
                                     except Exception as e_ask_name:
-                                        logger.error(" ao pedir nome para save_face: {e_ask_name}")
+                                        logger.error(f"Erro ao pedir nome para save_face: {e_ask_name}")
                                 # Não executa a função local nem envia FC response agora
 
                             # --- Caso Normal: Outras funções ou save_known_face com nome ---
@@ -1696,33 +1720,33 @@ class AudioLoop:
                                 self.thinking_event.set() # Pausa envio
 
                                 # Monta mensagem de feedback de voz
-                                voice_feedback_msg = f"Usuário, processando {function_name}, um momento..." # Padrão
+                                voice_feedback_msg = f"{self.trckuser}, processando {function_name}, um momento..." # Padrão
                                 if function_name == "save_known_face":
                                     person_name_fb = args.get('person_name', 'pessoa')
-                                    voice_feedback_msg = f"Usuário, salvando rosto de {person_name_fb}, um momento..."
+                                    voice_feedback_msg = f"{self.trckuser}, salvando rosto de {person_name_fb}, um momento..."
                                 elif function_name == "identify_person_in_front":
                                     voice_feedback_msg = "Usuário, identificando pessoa, um momento..."
                                 elif function_name == "find_object_and_estimate_distance":
                                     obj_desc_fb = args.get('object_description', 'objeto')
-                                    voice_feedback_msg = f"Usuário, localizando {obj_desc_fb}, um momento..."
+                                    voice_feedback_msg = f"{self.trckuser}, localizando {obj_desc_fb}, um momento..."
 
                                 # Envia feedback de voz ANTES de executar a função
                                 if self.session:
                                     try:
                                         # Envia feedback e termina o turno da IA
                                         await self.session.send(input=voice_feedback_msg, end_of_turn=True)
-                                        logger.info("  [Feedback Enviado]: {voice_feedback_msg}")
+                                        logger.info(f"  [Feedback Enviado]: {voice_feedback_msg}")
                                     except Exception as e_feedback:
-                                        logger.error(" ao enviar feedback pré-função: {e_feedback}")
+                                        logger.error(f"Erro ao enviar feedback pré-função: {e_feedback}")
 
                                 # --- Executa a Função Local Correspondente ---
                                 # Verifica se a função requer modo câmera
                                 vision_functions = ["save_known_face", "identify_person_in_front", "find_object_and_estimate_distance"]
                                 if self.video_mode != "camera" and function_name in vision_functions:
-                                    logger.info("[Function Call] '{function_name}' requer modo câmera, mas modo atual é '{self.video_mode}'.")
+                                    logger.info(f"[Function Call] '{function_name}' requer modo câmera, mas modo atual é '{self.video_mode}'.")
                                     result_message = "Desculpe, esta função só está disponível quando a câmera está ativa."
                                 else:
-                                    logger.info("  [Trackie] Processando Função '{function_name}' em background...")
+                                    logger.info(f"  [Trackie] Processando Função '{function_name}' em background...")
                                     # Chama o handler apropriado em outra thread
                                     try:
                                         if function_name == "save_known_face":
@@ -1731,7 +1755,7 @@ class AudioLoop:
                                                 result_message = await asyncio.to_thread(self._handle_save_known_face, person_name_arg)
                                             else:
                                                 result_message = "Erro interno: nome não disponível para salvar rosto neste ponto."
-                                                logger.error(" LÓGICO: Tentativa de chamar _handle_save_known_face sem nome.")
+                                                logger.error("ERRO LÓGICO: Tentativa de chamar _handle_save_known_face sem nome.")
                                         elif function_name == "identify_person_in_front":
                                             # Verifica se pandas está disponível
                                             if pd is None:
@@ -1752,19 +1776,19 @@ class AudioLoop:
                                                     )
                                             else:
                                                 result_message = "Descrição ou tipo do objeto não fornecido corretamente para localização."
-                                                logger.error(": Argumentos faltando para find_object_and_estimate_distance: desc='{desc}', type='{obj_type}'")
+                                                logger.error(f"ERRO: Argumentos faltando para find_object_and_estimate_distance: desc='{desc}', type='{obj_type}'")
                                         else:
                                             result_message = f"Função '{function_name}' desconhecida ou não implementada."
-                                            logger.warning(": Recebida chamada para função não mapeada: {function_name}")
+                                            logger.warning(f"AVISO: Recebida chamada para função não mapeada: {function_name}")
                                     except Exception as e_handler:
-                                         logger.error(" ao executar handler para '{function_name}': {e_handler}")
+                                         logger.error(f"Erro ao executar handler para '{function_name}': {e_handler}")
                                          traceback.print_exc()
                                          result_message = f"Ocorreu um erro interno ao processar a função {function_name}."
 
 
                             # --- Envia Resultado da Função de Volta (se houver) ---
                             if result_message is not None: # Só envia se um resultado foi gerado
-                                logger.info("  [Trackie] Resultado da Função '{function_name}': {result_message}")
+                                logger.info(f"  [Trackie] Resultado da Função '{function_name}': {result_message}")
                                 if self.session:
                                     try:
                                         await self.session.send(
@@ -1778,7 +1802,7 @@ class AudioLoop:
                                         )
                                         logger.info("  [Trackie] Resultado da função enviado.")
                                     except Exception as e_send_fc_resp_main:
-                                        logger.error(" ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
+                                        logger.error(f"Erro ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
                                 else:
                                     logger.info("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função.")
 
@@ -1792,6 +1816,9 @@ class AudioLoop:
                     if not self.stop_event.is_set():
                         if has_received_data_in_turn:
                             # logger.info("\nFim do turno de resposta do Gemini.") # Log opcional
+                            # Adiciona uma nova linha se o último log foi um texto parcial do Gemini
+                            if response_part and response_part.text and not response_part.text.endswith('\n'):
+                                print() # Garante que o próximo log comece em uma nova linha
                             pass # Continua esperando o próximo turno
                         else:
                             # Se o loop `async for` terminar sem dados, pode indicar fim normal ou problema
@@ -1802,7 +1829,7 @@ class AudioLoop:
 
                 # --- Tratamento de Erros no Loop de Recebimento ---
                 except Exception as e_inner_loop:
-                    logger.error(" durante o recebimento/processamento de resposta: {e_inner_loop}")
+                    logger.error(f"Erro durante o recebimento/processamento de resposta: {e_inner_loop}")
                     error_str_upper = str(e_inner_loop).upper()
                     # Verifica erros que indicam sessão fechada/perdida
                     if "LIVESESSION CLOSED" in error_str_upper or \
@@ -1826,7 +1853,7 @@ class AudioLoop:
             logger.info("receive_audio foi cancelado.")
         except Exception as e:
             # Erro crítico fora do loop principal (ex: na configuração inicial)
-            logger.error(" crítico em receive_audio: {e}")
+            logger.error(f"Erro crítico em receive_audio: {e}")
             traceback.print_exc()
             self.stop_event.set() # Garante que tudo pare
         finally:
@@ -1851,9 +1878,9 @@ class AudioLoop:
             try:
                 # Tenta usar a taxa de amostragem do dispositivo padrão
                 out_device_info = pya.get_default_output_device_info()
-                logger.info("Usando dispositivo de saída: {out_device_info['name']} @ {output_rate} Hz")
+                logger.info(f"Usando dispositivo de saída: {out_device_info['name']} @ {output_rate} Hz")
             except Exception as e_dev_info:
-                logger.info("Não foi possível obter info do dispositivo de saída padrão ({e_dev_info}). Usando taxa padrão: {output_rate} Hz")
+                logger.info(f"Não foi possível obter info do dispositivo de saída padrão ({e_dev_info}). Usando taxa padrão: {output_rate} Hz")
 
             # Abre o stream de saída em outra thread
             stream = await asyncio.to_thread(
@@ -1869,6 +1896,11 @@ class AudioLoop:
 
                 # Tenta obter áudio da fila com timeout
                 try:
+                    if self.out_queue and not self.out_queue.empty():
+                        logger.info("Nova entrada detectada, interrompendo áudio atual.")
+                        stream.stop_stream()
+                        await asyncio.sleep(0.1)
+                        stream.start_stream()
                     bytestream = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.5)
 
                     if bytestream is None: # Sinal de parada da fila
@@ -1901,12 +1933,12 @@ class AudioLoop:
                         logger.info("Stream de playback fechado (OSError). Encerrando play_audio.")
                         break # Sai do loop while
                     else:
-                        logger.error(" de OS ao reproduzir áudio: {e_os_play}")
+                        logger.error(f"Erro de OS ao reproduzir áudio: {e_os_play}")
                         traceback.print_exc()
                         break # Sai em outros erros de OS também
                 except Exception as e_inner:
                     # Erro genérico durante a reprodução
-                    logger.error(" ao reproduzir áudio (interno): {e_inner}")
+                    logger.error(f"Erro ao reproduzir áudio (interno): {e_inner}")
                     if "Stream closed" in str(e_inner): # Verifica se o erro indica stream fechado
                         logger.info("Stream de playback fechado (Exception). Encerrando play_audio.")
                         break # Sai do loop while
@@ -1918,7 +1950,7 @@ class AudioLoop:
             logger.info("play_audio foi cancelado.")
         except Exception as e:
             # Erro crítico na configuração ou loop principal
-            logger.error(" crítico em play_audio: {e}")
+            logger.error(f"Erro crítico em play_audio: {e}")
             traceback.print_exc()
             # Não seta stop_event aqui, deixa o run gerenciar
         finally:
@@ -1933,7 +1965,7 @@ class AudioLoop:
                     stream.close()
                     logger.info("Stream de áudio de saída fechado.")
                 except Exception as e_close:
-                    logger.error(" ao fechar stream de áudio de saída: {e_close}")
+                    logger.error(f"Erro ao fechar stream de áudio de saída: {e_close}")
             logger.info("play_audio concluído.")
 
 
@@ -1949,7 +1981,7 @@ class AudioLoop:
             try:
                 # Se for uma tentativa de reconexão, espera
                 if attempt > 0:
-                     logger.info("Tentativa de reconexão {attempt}/{max_retries} após {retry_delay:.1f}s...")
+                     logger.info(f"Tentativa de reconexão {attempt}/{max_retries} após {retry_delay:.1f}s...")
                      await asyncio.sleep(retry_delay)
 
                 # --- Limpa estado da sessão anterior ---
@@ -1984,7 +2016,7 @@ class AudioLoop:
                     elif hasattr(session, '_session_id'): # Tenta atributo privado como fallback
                          session_id_str = session._session_id
 
-                    logger.info("Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {session_id_str}")
+                    logger.info(f"Sessão Gemini LiveConnect estabelecida (Tentativa {attempt+1}). ID: {session_id_str}")
                     attempt = 0 # Reseta tentativas em caso de sucesso
 
                     # Recria filas para a nova sessão
@@ -2035,17 +2067,17 @@ class AudioLoop:
                 break
             except ExceptionGroup as eg:
                 # Erro vindo do TaskGroup (uma ou mais tarefas falharam)
-                logger.error("(s) no TaskGroup (Tentativa {attempt+1}):")
+                logger.error(f"Erro(s) no TaskGroup (Tentativa {attempt+1}):")
                 self.stop_event.set() # Para tudo se uma tarefa falhar criticamente
                 for i, exc in enumerate(eg.exceptions):
-                    logger.info("  Erro {i+1}: {type(exc).__name__} - {exc}")
+                    logger.info(f"  Erro {i+1}: {type(exc).__name__} - {exc}")
                     # Imprime traceback para cada exceção no grupo
                     # traceback.print_exception(type(exc), exc, exc.__traceback__)
                 attempt += 1 # Tenta reconectar após falha no TaskGroup
                 self.session = None # Garante que a sessão seja considerada inválida
             except Exception as e:
                 # Erro durante a conexão inicial ou outro erro inesperado no loop run
-                logger.error(" ao conectar ou erro inesperado no método run (Tentativa {attempt+1}): {type(e).__name__} - {e}")
+                logger.error(f"Erro ao conectar ou erro inesperado no método run (Tentativa {attempt+1}): {type(e).__name__} - {e}")
                 traceback.print_exc() # Imprime traceback completo
 
                 # Verifica se o erro é relacionado à conexão/sessão para decidir se retenta
@@ -2059,7 +2091,7 @@ class AudioLoop:
                 ])
 
                 if is_connection_error:
-                    logger.info("Detectado erro relacionado à sessão ou conexão Gemini: {e}")
+                    logger.info(f"Detectado erro relacionado à sessão ou conexão Gemini: {e}")
                 else:
                     logger.info("Erro não parece ser diretamente de conexão. Verifique o traceback.")
 
@@ -2086,7 +2118,7 @@ class AudioLoop:
                 await self.session.close()
                 logger.info("Sessão LiveConnect fechada.")
             except Exception as e_close_session:
-                logger.error(" ao fechar sessão LiveConnect na limpeza final: {e_close_session}")
+                logger.error(f"Erro ao fechar sessão LiveConnect na limpeza final: {e_close_session}")
         self.session = None
 
         # Sinaliza para a tarefa play_audio parar (colocando None na fila)
@@ -2097,7 +2129,7 @@ class AudioLoop:
             except asyncio.QueueFull:
                 logger.info("Aviso: Não foi possível colocar None na audio_in_queue (cheia) durante a limpeza.")
             except Exception as e_q_put:
-                logger.error(" ao colocar None na audio_in_queue durante a limpeza: {e_q_put}")
+                logger.error(f"Erro ao colocar None na audio_in_queue durante a limpeza: {e_q_put}")
 
         # Fecha janelas OpenCV se estiverem ativas
         if self.preview_window_active:
@@ -2106,7 +2138,7 @@ class AudioLoop:
                 cv2.destroyAllWindows()
                 logger.info("Janelas OpenCV destruídas no finally de run.")
             except Exception as e_cv_destroy_all:
-                 logger.warning(": erro ao tentar fechar janelas de preview na limpeza final: {e_cv_destroy_all}")
+                 logger.warning(f"AVISO: erro ao tentar fechar janelas de preview na limpeza final: {e_cv_destroy_all}")
             self.preview_window_active = False
 
         # Termina PyAudio
@@ -2117,7 +2149,7 @@ class AudioLoop:
                 pya.terminate()
                 logger.info("Recursos de PyAudio liberados.")
             except Exception as e_pya:
-                logger.error(" ao terminar PyAudio: {e_pya}")
+                logger.error(f"Erro ao terminar PyAudio: {e_pya}")
         logger.info("Limpeza de AudioLoop.run() concluída.")
 
 
@@ -2148,7 +2180,7 @@ if __name__ == "__main__":
     # Verifica se o modelo YOLO existe se o modo for camera
     if args.mode == "camera":
         if not os.path.exists(YOLO_MODEL_PATH):
-            logger.error(" CRÍTICO: Modelo YOLO '{YOLO_MODEL_PATH}' Não encontrado.")
+            logger.error(f"ERRO CRÍTICO: Modelo YOLO '{YOLO_MODEL_PATH}' Não encontrado.")
             logger.info("Verifique o caminho em BaseDir e YOLO_MODEL_PATH ou baixe o modelo.")
             exit(1) # Sai se o modelo não for encontrado
 
@@ -2172,7 +2204,7 @@ if __name__ == "__main__":
 
     main_loop = None
     try:
-        logger.info("Iniciando Trackie no modo: {args.mode}")
+        logger.info(f"Iniciando Trackie no modo: {args.mode}")
         # Cria a instância principal
         main_loop = AudioLoop(video_mode=args.mode, show_preview=show_actual_preview)
         # Executa o loop principal assíncrono
@@ -2187,7 +2219,7 @@ if __name__ == "__main__":
             # time.sleep(1) # Opcional
     except Exception as e:
         # Captura qualquer outra exceção não tratada no nível superior
-        logger.error(" inesperado e não tratado no bloco __main__: {type(e).__name__}: {e}")
+        logger.error(f"Erro inesperado e não tratado no bloco __main__: {type(e).__name__}: {e}")
         traceback.print_exc()
         if main_loop:
             logger.info("Sinalizando parada devido a erro inesperado...")
@@ -2201,6 +2233,6 @@ if __name__ == "__main__":
         #          logger.info("Tentando terminar PyAudio no finally do main...")
         #          pya.terminate()
         #      except Exception as e_pya_final:
-        #          logger.error(" ao terminar PyAudio no finally do main: {e_pya_final}")
+        #          logger.error(f"Erro ao terminar PyAudio no finally do main: {e_pya_final}")
 
         logger.info("Programa completamente finalizado.")
