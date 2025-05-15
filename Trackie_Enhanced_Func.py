@@ -2,6 +2,7 @@ import os
 import asyncio
 import base64
 import io
+import json
 import logging
 
 logging.basicConfig(
@@ -13,7 +14,6 @@ logger = logging.getLogger(__name__)
 import traceback
 import time
 import argparse
-import json
 import threading
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -64,9 +64,10 @@ BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
 # --- Caminho para o arquivo de prompt ---
 SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.py")
 CONFIG_PATH = os.path.join(BaseDir, "UserSettings", "trckconfig.json")
+SNOWBOY_MODEL_PATH = os.path.join(BaseDir, "WorkTools", "trackie.pmdl")
 
 # YOLO
-YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolov8n.pt")
+YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolo11n.pt")
 DANGER_CLASSES = {
     # (Dicionário DANGER_CLASSES inalterado - omitido para brevidade)
     'faca':             ['knife'],
@@ -1724,11 +1725,14 @@ class AudioLoop:
                                 if function_name == "save_known_face":
                                     person_name_fb = args.get('person_name', 'pessoa')
                                     voice_feedback_msg = f"{self.trckuser}, salvando rosto de {person_name_fb}, um momento..."
+                                    logger.info(f"Salvando rosto de {person_name_fb} ")
                                 elif function_name == "identify_person_in_front":
                                     voice_feedback_msg = "Usuário, identificando pessoa, um momento..."
+                                    logger.info(f"Identificando rosto... {person_name_fb} ")
                                 elif function_name == "find_object_and_estimate_distance":
                                     obj_desc_fb = args.get('object_description', 'objeto')
                                     voice_feedback_msg = f"{self.trckuser}, localizando {obj_desc_fb}, um momento..."
+                                    logger.info(f"Salvando rosto de {person_name_fb} ")
 
                                 # Envia feedback de voz ANTES de executar a função
                                 if self.session:
