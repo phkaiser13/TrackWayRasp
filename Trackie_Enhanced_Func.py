@@ -64,7 +64,22 @@ BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
 # --- Caminho para o arquivo de prompt ---
 SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.py")
 CONFIG_PATH = os.path.join(BaseDir, "UserSettings", "trckconfig.json")
-SNOWBOY_MODEL_PATH = os.path.join(BaseDir, "WorkTools", "trackie.pmdl")
+#SNOWBOY_MODEL_PATH = os.path.join(BaseDir, "WorkTools", "trackie.pmdl")
+
+# Carregar o JSON e extrair CFG'S
+try:
+    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+        config_data = json.load(f)
+    trckuser = config_data.get('trckuser', 'Usuário Padrão')  # Valor padrão se trckuser não existir
+except FileNotFoundError:
+    logging.error(f"Arquivo de configuração não encontrado: {CONFIG_PATH}")
+    trckuser = 'Usuário Padrão'  # Valor padrão em caso de erro
+except json.JSONDecodeError as e:
+    logging.error(f"Erro ao decodificar JSON em {CONFIG_PATH}: {e}")
+    trckuser = 'Usuário Padrão'
+except Exception as e:
+    logging.error(f"Erro ao carregar configuração de {CONFIG_PATH}: {e}")
+    trckuser = 'Usuário Padrão'
 
 # YOLO
 YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolo11n.pt")
@@ -340,7 +355,10 @@ CONFIG = types.LiveConnectConfig(
     ),
     tools=tools,
     system_instruction=types.Content(
-        parts=[types.Part.from_text(text=system_instruction_text)], # <-- Usa o texto carregado do arquivo
+        parts=[
+            types.Part.from_text(text=f"O nome do seu usuário é {trckuser}"), # Usa f-string para formatar
+            types.Part.from_text(text=system_instruction_text)
+        ],
         role="system"
     ),
 )
