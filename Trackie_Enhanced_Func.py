@@ -16,6 +16,11 @@ import time
 import argparse
 import threading
 from typing import Dict, Any, Optional, List, Tuple
+try:
+    from playsound import playsound
+except ImportError:
+    print("Biblioteca playsound não encontrada. Instale com: pip install playsound")
+    exit()
 
 # Bibliotecas de Terceiros
 import cv2
@@ -31,7 +36,7 @@ except ImportError:
     pd = None # Define como None se não encontrado
 
 from google import genai
-from google.genai import types
+from google.genai import types  
 from google.genai import errors # Importado para referência
 from google.protobuf.struct_pb2 import Value
 from ultralytics import YOLO
@@ -60,9 +65,19 @@ CHUNK_SIZE = 1024
 MODEL = "models/gemini-2.0-flash-live-001"
 DEFAULT_MODE = "camera"
 BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
+DANGER_SOUND_PATH = os.path.join(BaseDir, "WorkTools", "SoundBibTrackie", "Trackiedanger.wav")
+
+def play_wav_file_sync(filepath):
+    """Reproduz um arquivo WAV de forma síncrona."""
+    try:
+        logger.info(f"Reproduzindo arquivo de áudio: {filepath}")
+        playsound(filepath)
+        logger.info(f"Reprodução de {filepath} concluída.")
+    except Exception as e:
+        logger.error(f"Erro ao reproduzir o arquivo WAV {filepath}: {e}")     
 
 # --- Caminho para o arquivo de prompt ---
-SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.py")
+SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.txt")
 CONFIG_PATH = os.path.join(BaseDir, "UserSettings", "trckconfig.json")
 #SNOWBOY_MODEL_PATH = os.path.join(BaseDir, "WorkTools", "trackie.pmdl")
 
@@ -284,7 +299,7 @@ except Exception as e_client:
 
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
-        types.Tool(code_execution=types.ToolCodeExecution),
+    types.Tool(code_execution=types.ToolCodeExecution),
     types.Tool(google_search=types.GoogleSearch()),
     types.Tool(
         function_declarations=[
@@ -333,6 +348,7 @@ system_instruction_text = "Você é um assistente prestativo." # Prompt padrão 
 try:
     if not os.path.exists(SYSTEM_INSTRUCTION_PATH):
          logger.warning(f"AVISO: Arquivo de instrução do sistema não encontrado em '{SYSTEM_INSTRUCTION_PATH}'. Usando prompt padrão.")
+         exit()
     else:
         with open(SYSTEM_INSTRUCTION_PATH, 'r', encoding='utf-8') as f:
             system_instruction_text = f.read()
@@ -345,7 +361,7 @@ except Exception as e:
 
 # --- Configuração da Sessão LiveConnect Gemini ---
 CONFIG = types.LiveConnectConfig(
-    temperature=0,
+    temperature=0.2,
     response_modalities=["audio"], # AJUSTADO: Corrigido para ser uma lista de strings
     speech_config=types.SpeechConfig(
         language_code="pt-BR",
@@ -356,11 +372,11 @@ CONFIG = types.LiveConnectConfig(
     tools=tools,
     system_instruction=types.Content(
         parts=[
-            types.Part.from_text(text=f"O nome do seu usuário é {trckuser}"), # Usa f-string para formatar
+            types.Part.from_text(text=f"O nome do seu usuário é {trckuser}, "), # Usa f-string para formatar
             types.Part.from_text(text=system_instruction_text)
         ],
         role="system"
-    ),
+    )
 )
 
 # --- Inicialização do PyAudio ---
@@ -456,6 +472,8 @@ class AudioLoop:
             # traceback.print_exc() # Descomente para depurar o carregamento do MiDaS
             self.midas_model = None
             self.midas_transform = None
+          
+ 
 
 
     async def send_text(self):
@@ -471,7 +489,7 @@ class AudioLoop:
                         self.out_queue.task_done()
                         
 
-                # --- Tratamento de Comandos Locais/Debug ---
+                # --- Tratamento de Comandos Locais/Debug ---   
                 if text.lower() == "q":
                     self.stop_event.set()
                     logger.info("Sinal de parada ('q') recebido. Encerrando...")
@@ -694,7 +712,8 @@ class AudioLoop:
                 if yolo_alerts and self.session:
                     for alert_class_name in yolo_alerts:
                         try:
-                            alert_msg = f"{self.trckuser}, CUIDADO! {alert_class_name.upper()} detectado!"
+                            alert_msg = f"YOLO DIZENDO (DETECÇÃO DE PERIGOS):TRACKIE CUIDADO! AVISE AO {self.trckuser} QUE {alert_class_name.upper()} FOI DETECTADO!"
+                           # play_wav_file_sync(DANGER_SOUND_PATH)
                             # Não precisa verificar out_queue aqui, pois envia direto
                             await self.session.send(input=alert_msg, end_of_turn=True)
                             logger.info(f"ALERTA URGENTE ENVIADO: {alert_msg}")
@@ -778,8 +797,8 @@ class AudioLoop:
             logger.error(f"Erro ao capturar tela: {e}")
             # traceback.print_exc() # Descomente para depuração detalhada do mss
             return None
-
-
+   
+   
     async def get_screen(self):
         # (Função get_screen inalterada, exceto por traceback em erro crítico - omitida para brevidade)
         logger.info("Iniciando captura de tela...")
@@ -1339,7 +1358,7 @@ class AudioLoop:
                             coords = list(map(int, coords_tensor))
                             bbox_dict = {'x1': coords[0], 'y1': coords[1], 'x2': coords[2], 'y2': coords[3]}
                             best_match = (bbox_dict, conf, class_name)
-                            # logger.info(f"[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
+                            logger.info(f"[YOLO Match] Novo melhor match: {class_name} ({conf:.2f})") # Log opcional
 
         # Retorna a melhor correspondência encontrada (ou None)
         return best_match
@@ -1626,6 +1645,12 @@ class AudioLoop:
                     # esta tarefa pode bloquear indefinidamente. A detecção de erros
                     # abaixo (LiveSession closed, etc.) mitiga isso parcialmente.
                     async for response_part in self.session.receive():
+                   #     logger.info(f"--- RAW GEMINI RESPONSE PART ---")
+                    #    logger.info(f"Response_part.text: {response_part.text if hasattr(response_part, 'text') else 'N/A'}")
+                     #   logger.info(f"Response_part.function_call: {response_part.function_call if hasattr(response_part, 'function_call') else 'N/A'}")
+                      #  logger.info(f"Response_part.data (presente?): {hasattr(response_part, 'data') and bool(response_part.data)}")
+                       # logger.info(f"Awaiting name flag: {self.awaiting_name_for_save_face}")
+                        #logger.info(f"Thinking event set: {self.thinking_event.is_set()}")
                         if self.stop_event.is_set():
                             break
                         if has_received_data_in_turn and response_part.text:
