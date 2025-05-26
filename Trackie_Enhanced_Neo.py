@@ -36,9 +36,17 @@ except ImportError:
     pd = None # Define como None se não encontrado
 
 from google import genai
-from google.genai import types  
-from google.genai import errors # Importado para referência
-from google.protobuf.struct_pb2 import Value
+from google.genai import types
+from google.genai.types import Tool, FunctionDeclaration
+from google.genai.types import Content, Part
+from google.genai.types import GenerateContentConfig
+from google.genai import errors
+from google.genai.types import LiveConnectConfig, Modality
+from google.protobuf.struct_pb2 import Value, Struct
+
+
+
+
 from ultralytics import YOLO
 import numpy as np
 from deepface import DeepFace
@@ -62,7 +70,7 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 
-MODEL = "models/gemini-2.5-flash-preview-native-audio-dialog"
+MODEL = "models/gemini-2.0-flash-live-001"
 DEFAULT_MODE = "camera"
 BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
 DANGER_SOUND_PATH = os.path.join(BaseDir, "WorkTools", "SoundBibTrackie", "Trackiedanger.wav")
@@ -74,7 +82,7 @@ def play_wav_file_sync(filepath):
         playsound(filepath)
         logger.info(f"Reprodução de {filepath} concluída.")
     except Exception as e:
-        logger.error(f"Erro ao reproduzir o arquivo WAV {filepath}: {e}")
+        logger.error(f"Erro ao reproduzir o arquivo WAV {filepath}: {e}")     
 
 # --- Caminho para o arquivo de prompt ---
 SYSTEM_INSTRUCTION_PATH = os.path.join(BaseDir,"UserSettings", "Prompt's", "TrckItcs.txt")
@@ -95,22 +103,9 @@ except json.JSONDecodeError as e:
 except Exception as e:
     logging.error(f"Erro ao carregar configuração de {CONFIG_PATH}: {e}")
     trckuser = 'Usuário Padrão'
-try:
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config_data = json.load(f)
-    Trckvoice = config_data.get('Trckvoice', 'Zephyr')  # Valor padrão se Trckvoice não existir, quase sempre feminino (Zephyr, Leda, Entre Outros)
-except FileNotFoundError:
-    logging.error(f"Arquivo de configuração não encontrado: {CONFIG_PATH}")
-    Trckvoice = 'Zephyr'  # Valor padrão em caso de erro
-except json.JSONDecodeError as e:
-    logging.error(f"Erro ao decodificar JSON em {CONFIG_PATH}: {e}")
-    Trckvoice = 'Zephyr'
-except Exception as e:
-    logging.error(f"Erro ao carregar configuração de {CONFIG_PATH}: {e}")
-    Trckvoice = 'Zephyr'
 
 # YOLO
-YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolov8n.pt")
+YOLO_MODEL_PATH = os.path.join(BaseDir,"WorkTools", "yolo11n.pt")
 DANGER_CLASSES = {
     # (Dicionário DANGER_CLASSES inalterado - omitido para brevidade)
     'faca':             ['knife'],
@@ -375,18 +370,13 @@ except Exception as e:
 # --- Configuração da Sessão LiveConnect Gemini ---
 CONFIG = types.LiveConnectConfig(
     temperature=0.2,
-    response_modalities=["audio"],
-    media_resolution="MEDIA_RESOLUTION_MEDIUM", 
+    response_modalities=["audio"], # AJUSTADO: Corrigido para ser uma lista de strings
     speech_config=types.SpeechConfig(
         language_code="pt-BR",
         voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Orus")
         )
     ),
-    context_window_compression=types.ContextWindowCompressionConfig(
-        trigger_tokens=25600,
-        sliding_window=types.SlidingWindow(target_tokens=12800),
-        ),
     tools=tools,
     system_instruction=types.Content(
         parts=[
@@ -666,17 +656,17 @@ class AudioLoop:
         try:
             logger.info("Iniciando captura da câmera...")
             cap = await asyncio.to_thread(cv2.VideoCapture, 0)
-            target_fps = 3
+            target_fps = 1
             # Tenta definir FPS, mas não é garantido que funcione em todas as câmeras/drivers
             cap.set(cv2.CAP_PROP_FPS, target_fps)
             actual_fps = cap.get(cv2.CAP_PROP_FPS)
             logger.info(f"FPS solicitado: {target_fps}, FPS real da câmera: {actual_fps if actual_fps > 0 else 'Não disponível'}")
 
-            if actual_fps > 2 and actual_fps < target_fps * 5: # Usa FPS real se razoável
-                sleep_interval = 0.5 / actual_fps
+            if actual_fps > 0 and actual_fps < target_fps * 5: # Usa FPS real se razoável
+                sleep_interval = 1 / actual_fps
             else:
-                sleep_interval = 0.5 / target_fps # Usa FPS alvo como fallback
-            sleep_interval = max(0.1, min(sleep_interval, 0.5)) # Limita entre 0.1s e 1.0s
+                sleep_interval = 1 / target_fps # Usa FPS alvo como fallback
+            sleep_interval = max(0.1, min(sleep_interval, 1.0)) # Limita entre 0.1s e 1.0s
             logger.info(f"Intervalo de captura de frame: {sleep_interval:.2f}s")
 
 
@@ -1565,7 +1555,7 @@ class AudioLoop:
                 depth_value = depth_map[center_y, center_x]
 
                 # --- Heurística de Conversão MiDaS (MUITO BRUTA - PRECISA CALIBRAR) ---
-                # StreamGenerateContentResponse retorna profundidade inversa (maior valor = mais perto)
+                # MiDaS_small retorna profundidade inversa (maior valor = mais perto)
                 # Valores dependem muito da escala da cena e do modelo.
                 # Esta é uma tentativa de mapeamento muito simplificada.
                 if depth_value > 1e-6: # Evita divisão por zero ou valores inválidos
@@ -1730,7 +1720,7 @@ class AudioLoop:
                                                     response={"result": Value(string_value=result_message)}
                                                 )]
                                             )
-                                            
+                                            # Não usar end_of_turn=True aqui, deixa Gemini decidir quando responder
                                         )
                                         logger.info("  [Trackie] Resultado da função (awaiting name) enviado.")
                                     except Exception as e_send_fc_resp:
@@ -1866,12 +1856,9 @@ class AudioLoop:
                                             )
                                         )
                                         logger.info("  [Trackie] Resultado da função enviado.")
-                                        print(f"Função Chamada")
                                     except Exception as e_send_fc_resp_main:
                                         logger.error(f"Erro ao enviar FunctionResponse (main): {e_send_fc_resp_main}")
-                                        print(f"Função não Chamada")
                                 else:
-                                    print(f"Função não Chamada")
                                     logger.info("  [Trackie] Sessão inativa. Não foi possível enviar resultado da função.")
 
                                 # Libera o envio de dados após processar a função
