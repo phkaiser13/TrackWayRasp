@@ -4,50 +4,515 @@ import base64
 import io
 import json
 import logging
+import traceback # Already imported
+import time
+import argparse
+import threading
+from typing import Dict, Any, Optional, List, Tuple
 
+# Imports for auto-installation mechanism
+import sys
+import subprocess
+
+# Logging setup (from your original code)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
-import traceback
-import time
-import argparse
-import threading
-from typing import Dict, Any, Optional, List, Tuple
+
+# --- Auto-installing imports ---
+
+# playsound
+playsound_module = None
 try:
-    from playsound import playsound
+    from playsound import playsound as playsound_func
+    playsound_module = playsound_func # Assign to a common name for checking
+    logger.info("Biblioteca 'playsound' importada com sucesso.")
 except ImportError:
-    print("Biblioteca playsound não encontrada. Instale com: pip install playsound")
-    exit()
+    logger.warning("Biblioteca 'playsound' não encontrada. Tentando instalar via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'playsound'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'playsound' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'playsound':\n{process.stderr}")
+            from playsound import playsound as playsound_func # Re-tentativa de importação
+            playsound_module = playsound_func
+            logger.info("Biblioteca 'playsound' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'playsound'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'playsound' não pôde ser instalada. Funcionalidades de som podem não estar disponíveis.")
+            # playsound_module remains None
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'playsound' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'playsound' não pôde ser importada. Funcionalidades de som podem não estar disponíveis.")
+        # playsound_module remains None
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'playsound': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'playsound' não pôde ser importada/instalada. Funcionalidades de som podem não estar disponíveis.")
+        # playsound_module remains None
+# For convenience, if the original code used `playsound` directly:
+if playsound_module is not None:
+    playsound = playsound_module
+else:
+    playsound = None
+
 
 # Bibliotecas de Terceiros
-import cv2
-import pyaudio
-from PIL import Image
-import mss
-# Tenta importar pandas, necessário para DeepFace.find
+
+# cv2 (opencv-python)
+cv2 = None
 try:
-    import pandas as pd
+    import cv2 as cv2_module
+    cv2 = cv2_module
+    logger.info("Biblioteca 'cv2' (OpenCV) importada com sucesso.")
 except ImportError:
-    logger.info("AVISO: Biblioteca 'pandas' não encontrada. 'identify_person_in_front' pode não funcionar.")
-    logger.info("Instale com: pip install pandas")
-    pd = None # Define como None se não encontrado
+    logger.warning("Biblioteca 'cv2' (OpenCV) não encontrada. Tentando instalar 'opencv-python' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'opencv-python'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'opencv-python' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'opencv-python':\n{process.stderr}")
+            import cv2 as cv2_module # Re-tentativa de importação
+            cv2 = cv2_module
+            logger.info("Biblioteca 'cv2' (OpenCV) instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'opencv-python'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'cv2' (OpenCV) não pôde ser instalada. Funcionalidades de processamento de imagem podem não estar disponíveis.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'cv2' (OpenCV) após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'cv2' (OpenCV) não pôde ser importada. Funcionalidades de processamento de imagem podem não estar disponíveis.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'cv2' (OpenCV): {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'cv2' (OpenCV) não pôde ser importada/instalada. Funcionalidades de processamento de imagem podem não estar disponíveis.")
 
-from google import genai
-from google.genai import types  
-from google.genai import errors # Importado para referência
-from google.protobuf.struct_pb2 import Value
-from ultralytics import YOLO
-import numpy as np
-from deepface import DeepFace
-import torch
-import torchvision
-import timm
+# pyaudio
+pyaudio = None
+try:
+    import pyaudio as pyaudio_module
+    pyaudio = pyaudio_module
+    logger.info("Biblioteca 'pyaudio' importada com sucesso.")
+except ImportError:
+    logger.warning("Biblioteca 'pyaudio' não encontrada. Tentando instalar 'PyAudio' via pip...")
+    logger.info("Nota: A instalação do PyAudio pode requerer dependências de sistema como PortAudio (ex: 'sudo apt-get install portaudio19-dev' no Debian/Ubuntu).")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'PyAudio'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'PyAudio' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'PyAudio':\n{process.stderr}")
+            import pyaudio as pyaudio_module # Re-tentativa de importação
+            pyaudio = pyaudio_module
+            logger.info("Biblioteca 'pyaudio' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'PyAudio'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'pyaudio' não pôde ser instalada. Funcionalidades de áudio podem não estar disponíveis.")
+            logger.warning("Se a instalação falhou, verifique se as dependências de sistema (ex: PortAudio) estão instaladas.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'pyaudio' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'pyaudio' não pôde ser importada. Funcionalidades de áudio podem não estar disponíveis.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'pyaudio': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'pyaudio' não pôde ser importada/instalada. Funcionalidades de áudio podem não estar disponíveis.")
 
+# PIL (Pillow)
+Image = None
+try:
+    from PIL import Image as PIL_Image
+    Image = PIL_Image
+    logger.info("Módulo 'Image' da biblioteca 'PIL' (Pillow) importado com sucesso.")
+except ImportError:
+    logger.warning("Módulo 'Image' da biblioteca 'PIL' (Pillow) não encontrado. Tentando instalar 'Pillow' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'Pillow'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'Pillow' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'Pillow':\n{process.stderr}")
+            from PIL import Image as PIL_Image # Re-tentativa de importação
+            Image = PIL_Image
+            logger.info("Módulo 'Image' da biblioteca 'PIL' (Pillow) instalado e importado com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'Pillow'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'PIL' (Pillow) não pôde ser instalada. Funcionalidades de manipulação de imagem podem não estar disponíveis.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'Image' de 'PIL' (Pillow) após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'PIL' (Pillow) não pôde ser importada. Funcionalidades de manipulação de imagem podem não estar disponíveis.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'PIL' (Pillow): {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'PIL' (Pillow) não pôde ser importada/instalada. Funcionalidades de manipulação de imagem podem não estar disponíveis.")
 
+# mss
+mss = None
+try:
+    import mss as mss_module
+    mss = mss_module
+    logger.info("Biblioteca 'mss' importada com sucesso.")
+except ImportError:
+    logger.warning("Biblioteca 'mss' não encontrada. Tentando instalar 'mss' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'mss'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'mss' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'mss':\n{process.stderr}")
+            import mss as mss_module # Re-tentativa de importação
+            mss = mss_module
+            logger.info("Biblioteca 'mss' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'mss'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'mss' não pôde ser instalada. Funcionalidades de captura de tela podem não estar disponíveis.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'mss' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'mss' não pôde ser importada. Funcionalidades de captura de tela podem não estar disponíveis.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'mss': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'mss' não pôde ser importada/instalada. Funcionalidades de captura de tela podem não estar disponíveis.")
 
+# pandas
+pd = None
+try:
+    import pandas as pd_module
+    pd = pd_module
+    logger.info("Biblioteca 'pandas' importada com sucesso como 'pd'.")
+except ImportError:
+    logger.warning("Biblioteca 'pandas' não encontrada. Tentando instalar 'pandas' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'pandas'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'pandas' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'pandas':\n{process.stderr}")
+            import pandas as pd_module # Re-tentativa de importação
+            pd = pd_module
+            logger.info("Biblioteca 'pandas' instalada e importada com sucesso como 'pd'.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'pandas'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'pandas' não pôde ser instalada. 'identify_person_in_front' pode não funcionar.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'pandas' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'pandas' não pôde ser importada. 'identify_person_in_front' pode não funcionar.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'pandas': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'pandas' não pôde ser importada/instalada. 'identify_person_in_front' pode não funcionar.")
+
+# google.genai and related imports
+genai, types, Tool, FunctionDeclaration, Content, Part, GenerateContentConfig, errors, LiveConnectConfig, Modality = (None,) * 10
+_genai_components_imported = False
+try:
+    from google import genai as genai_module
+    from google.genai import types as types_module
+    from google.genai.types import Tool as Tool_type, FunctionDeclaration as FD_type, Content as Content_type, Part as Part_type, GenerateContentConfig as GCC_type, LiveConnectConfig as LCC_type, Modality as Modality_type
+    from google.genai import errors as errors_module
+    
+    genai, types, Tool, FunctionDeclaration, Content, Part, GenerateContentConfig, errors, LiveConnectConfig, Modality = \
+        genai_module, types_module, Tool_type, FD_type, Content_type, Part_type, GCC_type, errors_module, LCC_type, Modality_type
+    logger.info("Componentes de 'google.genai' importados com sucesso.")
+    _genai_components_imported = True
+except ImportError:
+    logger.warning("Componentes de 'google.genai' não encontrados. Tentando instalar 'google-generativeai'...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'google-generativeai'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'google-generativeai' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'google-generativeai':\n{process.stderr}")
+            from google import genai as genai_module
+            from google.genai import types as types_module
+            from google.genai.types import Tool as Tool_type, FunctionDeclaration as FD_type, Content as Content_type, Part as Part_type, GenerateContentConfig as GCC_type, LiveConnectConfig as LCC_type, Modality as Modality_type
+            from google.genai import errors as errors_module
+            
+            genai, types, Tool, FunctionDeclaration, Content, Part, GenerateContentConfig, errors, LiveConnectConfig, Modality = \
+                genai_module, types_module, Tool_type, FD_type, Content_type, Part_type, GCC_type, errors_module, LCC_type, Modality_type
+            logger.info("Componentes de 'google.genai' instalados e importados com sucesso.")
+            _genai_components_imported = True
+        else:
+            logger.error(f"FALHA AO INSTALAR 'google-generativeai'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR componentes de 'google.genai' após a tentativa de instalação.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'google.genai': {e}\n{traceback.format_exc()}")
+
+if not _genai_components_imported:
+    logger.warning("AVISO: Componentes de 'google.genai' não puderam ser importados/instalados. Funcionalidades relacionadas ao GenAI podem não estar disponíveis.")
+    # Variables are already initialized to None
+
+# google.protobuf (protobuf)
+Value, Struct = None, None
+_protobuf_imported = False
+try:
+    from google.protobuf.struct_pb2 import Value as Value_pb, Struct as Struct_pb
+    Value, Struct = Value_pb, Struct_pb
+    logger.info("Componentes de 'google.protobuf' importados com sucesso.")
+    _protobuf_imported = True
+except ImportError:
+    logger.warning("Componentes de 'google.protobuf' não encontrados. Tentando instalar 'protobuf'...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'protobuf'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'protobuf' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'protobuf':\n{process.stderr}")
+            from google.protobuf.struct_pb2 import Value as Value_pb, Struct as Struct_pb
+            Value, Struct = Value_pb, Struct_pb
+            logger.info("Componentes de 'google.protobuf' instalados e importados com sucesso.")
+            _protobuf_imported = True
+        else:
+            logger.error(f"FALHA AO INSTALAR 'protobuf'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR componentes de 'google.protobuf' após a tentativa de instalação.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'google.protobuf': {e}\n{traceback.format_exc()}")
+
+if not _protobuf_imported:
+    logger.warning("AVISO: Componentes de 'google.protobuf' não puderam ser importados/instalados.")
+    # Variables are already initialized to None
+
+# ultralytics
+YOLO = None
+try:
+    from ultralytics import YOLO as YOLO_ultralytics
+    YOLO = YOLO_ultralytics
+    logger.info("Módulo 'YOLO' da biblioteca 'ultralytics' importado com sucesso.")
+except ImportError:
+    logger.warning("Módulo 'YOLO' da biblioteca 'ultralytics' não encontrado. Tentando instalar 'ultralytics' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'ultralytics'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'ultralytics' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'ultralytics':\n{process.stderr}")
+            from ultralytics import YOLO as YOLO_ultralytics # Re-tentativa de importação
+            YOLO = YOLO_ultralytics
+            logger.info("Módulo 'YOLO' da biblioteca 'ultralytics' instalado e importado com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'ultralytics'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'ultralytics' não pôde ser instalada.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'YOLO' de 'ultralytics' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'ultralytics' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'ultralytics': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'ultralytics' não pôde ser importada/instalada.")
+
+# numpy
+np = None
+try:
+    import numpy as np_module
+    np = np_module
+    logger.info("Biblioteca 'numpy' importada com sucesso como 'np'.")
+except ImportError:
+    logger.warning("Biblioteca 'numpy' não encontrada. Tentando instalar 'numpy' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'numpy'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'numpy' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'numpy':\n{process.stderr}")
+            import numpy as np_module # Re-tentativa de importação
+            np = np_module
+            logger.info("Biblioteca 'numpy' instalada e importada com sucesso como 'np'.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'numpy'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'numpy' não pôde ser instalada.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'numpy' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'numpy' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'numpy': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'numpy' não pôde ser importada/instalada.")
+
+# deepface
+DeepFace = None
+try:
+    from deepface import DeepFace as DeepFace_module
+    DeepFace = DeepFace_module
+    logger.info("Módulo 'DeepFace' da biblioteca 'deepface' importado com sucesso.")
+except ImportError:
+    logger.warning("Módulo 'DeepFace' da biblioteca 'deepface' não encontrado. Tentando instalar 'deepface' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'deepface'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'deepface' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'deepface':\n{process.stderr}")
+            from deepface import DeepFace as DeepFace_module # Re-tentativa de importação
+            DeepFace = DeepFace_module
+            logger.info("Módulo 'DeepFace' da biblioteca 'deepface' instalado e importado com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'deepface'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'deepface' não pôde ser instalada.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'DeepFace' de 'deepface' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'deepface' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'deepface': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'deepface' não pôde ser importada/instalada.")
+
+# torch
+torch = None
+try:
+    import torch as torch_module
+    torch = torch_module
+    logger.info("Biblioteca 'torch' importada com sucesso.")
+except ImportError:
+    logger.warning("Biblioteca 'torch' não encontrada. Tentando instalar 'torch' via pip...")
+    logger.info("Nota: A instalação do PyTorch pode ser demorada. Este comando tentará uma instalação genérica. Para versões específicas (CPU/CUDA), consulte o site oficial do PyTorch.")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'torch'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'torch' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'torch':\n{process.stderr}")
+            import torch as torch_module # Re-tentativa de importação
+            torch = torch_module
+            logger.info("Biblioteca 'torch' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'torch'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'torch' não pôde ser instalada. Verifique o site oficial do PyTorch para instruções de instalação específicas para seu sistema.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'torch' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'torch' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'torch': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'torch' não pôde ser importada/instalada.")
+
+# torchvision
+torchvision = None
+try:
+    import torchvision as torchvision_module
+    torchvision = torchvision_module
+    logger.info("Biblioteca 'torchvision' importada com sucesso.")
+except ImportError:
+    logger.warning("Biblioteca 'torchvision' não encontrada. Tentando instalar 'torchvision' via pip...")
+    logger.info("Nota: 'torchvision' geralmente é instalado junto ou após 'torch'.")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'torchvision'], # This might need specific index for CUDA if torch was installed with CUDA
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'torchvision' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'torchvision':\n{process.stderr}")
+            import torchvision as torchvision_module # Re-tentativa de importação
+            torchvision = torchvision_module
+            logger.info("Biblioteca 'torchvision' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'torchvision'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'torchvision' não pôde ser instalada.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'torchvision' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'torchvision' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'torchvision': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'torchvision' não pôde ser importada/instalada.")
+
+# timm
+timm = None
+try:
+    import timm as timm_module
+    timm = timm_module
+    logger.info("Biblioteca 'timm' (PyTorch Image Models) importada com sucesso.")
+except ImportError:
+    logger.warning("Biblioteca 'timm' não encontrada. Tentando instalar 'timm' via pip...")
+    try:
+        python_executable = sys.executable
+        process = subprocess.run(
+            [python_executable, '-m', 'pip', 'install', 'timm'],
+            capture_output=True, text=True, check=False, encoding='utf-8'
+        )
+        if process.returncode == 0:
+            logger.info(f"Instalação de 'timm' bem-sucedida:\n{process.stdout}")
+            if process.stderr:
+                logger.warning(f"Informações/avisos durante a instalação de 'timm':\n{process.stderr}")
+            import timm as timm_module # Re-tentativa de importação
+            timm = timm_module
+            logger.info("Biblioteca 'timm' instalada e importada com sucesso.")
+        else:
+            logger.error(f"FALHA AO INSTALAR 'timm'. Código de saída: {process.returncode}\nStdout: {process.stdout}\nStderr: {process.stderr}")
+            logger.warning("AVISO: Biblioteca 'timm' não pôde ser instalada.")
+    except ImportError:
+        logger.error("FALHA AO IMPORTAR 'timm' após a tentativa de instalação.")
+        logger.warning("AVISO: Biblioteca 'timm' não pôde ser importada.")
+    except Exception as e:
+        logger.error(f"Um erro inesperado ocorreu durante a tentativa de instalar/importar 'timm': {e}\n{traceback.format_exc()}")
+        logger.warning("AVISO: Biblioteca 'timm' não pôde ser importada/instalada.")
+
+# --- Rest of your code would go here ---
+# You can now check if a library was successfully imported, e.g.:
+# if pd:
+#     # use pandas
+# else:
+#     logger.warning("Pandas is not available, some features might be disabled.")
+
+# if playsound:
+#     # use playsound
+# else:
+#     logger.warning("Playsound is not available, audio output will be disabled.")
+
+# Example of how you might use a successfully imported module:
+if cv2:
+    logger.info(f"OpenCV version: {cv2.__version__}")
+else:
+    logger.warning("OpenCV (cv2) is not available. Image processing functionalities will be limited.")
+
+if YOLO and DeepFace and pd and torch:
+    logger.info("All major ML libraries (YOLO, DeepFace, Pandas, PyTorch) seem to be available.")
+else:
+    logger.warning("One or more ML libraries (YOLO, DeepFace, Pandas, PyTorch) are missing. Core functionalities might be affected.")
 
 # --- Configuração de Logging (Opcional, mas melhor que prints) ---
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
@@ -64,7 +529,7 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-2.0-flash-live-001"
 DEFAULT_MODE = "camera"
-BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
+BaseDir = "C:/TrackiePowerSHell/"
 DANGER_SOUND_PATH = os.path.join(BaseDir, "WorkTools", "SoundBibTrackie", "Trackiedanger.wav")
 
 def play_wav_file_sync(filepath):
