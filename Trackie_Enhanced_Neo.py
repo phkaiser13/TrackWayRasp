@@ -1,61 +1,10 @@
-import os
-import asyncio
-import base64
-import io
-import json
-import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger(__name__)
-import traceback
-import time
-import argparse
-import threading
-from typing import Dict, Any, Optional, List, Tuple
-try:
-    from playsound import playsound
-except ImportError:
-    print("Biblioteca playsound não encontrada. Instale com: pip install playsound")
-    exit()
+    logger.warning("OpenCV (cv2) is not available. Image processing functionalities will be limited.")
 
-# Bibliotecas de Terceiros
-import cv2
-import pyaudio
-from PIL import Image
-import mss
-# Tenta importar pandas, necessário para DeepFace.find
-try:
-    import pandas as pd
-except ImportError:
-    logger.info("AVISO: Biblioteca 'pandas' não encontrada. 'identify_person_in_front' pode não funcionar.")
-    logger.info("Instale com: pip install pandas")
-    pd = None # Define como None se não encontrado
-
-from google import genai
-from google.genai import types
-from google.genai.types import Tool, FunctionDeclaration
-from google.genai.types import Content, Part
-from google.genai.types import GenerateContentConfig
-from google.genai import errors
-from google.genai.types import LiveConnectConfig, Modality
-from google.protobuf.struct_pb2 import Value, Struct
-
-
-
-
-from ultralytics import YOLO
-import numpy as np
-from deepface import DeepFace
-import torch
-import torchvision
-import timm
-
-
-
+if YOLO and DeepFace and pd and torch:
+    logger.info("All major ML libraries (YOLO, DeepFace, Pandas, PyTorch) seem to be available.")
+else:
+    logger.warning("One or more ML libraries (YOLO, DeepFace, Pandas, PyTorch) are missing. Core functionalities might be affected.")
 
 # --- Configuração de Logging (Opcional, mas melhor que prints) ---
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
@@ -72,7 +21,7 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-2.0-flash-live-001"
 DEFAULT_MODE = "camera"
-BaseDir = "C:/Users/Pedro H/Downloads/TrackiePowerSHell/"
+BaseDir = "C:/TrackiePowerSHell/"
 DANGER_SOUND_PATH = os.path.join(BaseDir, "WorkTools", "SoundBibTrackie", "Trackiedanger.wav")
 
 def play_wav_file_sync(filepath):
@@ -307,41 +256,69 @@ except Exception as e_client:
 
 # --- Ferramentas Gemini (Function Calling) ---
 tools = [
-    types.Tool(code_execution=types.ToolCodeExecution),
-    types.Tool(google_search=types.GoogleSearch()),
+    types.Tool(code_execution=types.ToolCodeExecution()), # Mantido
+    types.Tool(google_search=types.GoogleSearch()),      # Mantido
     types.Tool(
         function_declarations=[
             types.FunctionDeclaration(
                 name="save_known_face",
-                description="Salva o rosto da pessoa atualmente em foco pela câmera. Se 'person_name' não for fornecido, a IA deve solicitar o nome ao usuário com uma mensagem clara, como 'Por favor, informe o nome da pessoa para salvar o rosto.' Após receber o nome, a função salva o rosto e confirma o salvamento com 'Rosto salvo com sucesso para [nome].' Se a captura falhar, retorna 'Erro: Não foi possível capturar o rosto. Tente novamente.'",
+                description=(
+                    "Salva o rosto da pessoa atualmente em foco pela câmera. "
+                    "Chame esta função quando o usuário pedir explicitamente para salvar, lembrar, registrar ou cadastrar um novo rosto. "
+                    "Se o parâmetro 'person_name' não for fornecido na chamada inicial, a IA DEVE solicitar o nome ao usuário com uma mensagem clara, "
+                    "como 'Por favor, informe o nome da pessoa para salvar o rosto.'. "
+                    "Após receber o nome, a função tentará salvar o rosto e retornará uma mensagem de confirmação como "
+                    "'Rosto salvo com sucesso para [nome].'. Se a captura ou o salvamento falhar, "
+                    "retorna uma mensagem de erro como 'Erro: Não foi possível capturar/salvar o rosto. Tente novamente.'"
+                ),
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
                         "person_name": types.Schema(
                             type=types.Type.STRING,
-                            description="Nome da pessoa a ser salvo. Se omitido, a IA deve solicitar ao usuário."
+                            description="Nome da pessoa cujo rosto deve ser salvo. Se omitido pelo usuário na primeira interação, a IA deve solicitá-lo."
                         )
+                        # 'person_name' não é 'required' aqui para permitir que a IA solicite se não for fornecido.
                     }
                 )
             ),
             types.FunctionDeclaration(
                 name="identify_person_in_front",
-                description="Identifica a pessoa atualmente em foco pela câmera usando o banco de dados de rostos conhecidos. Deve ser chamado apenas quando o usuário expressa explicitamente a intenção de identificar uma pessoa. Se múltiplos rostos forem detectados, retorna o mais próximo. Inclui a confiança da identificação (ex: 'Identificado como [nome] com 95% de confiança.'). Se não houver correspondência, retorna 'Pessoa não reconhecida.'",
-                parameters=types.Schema(type=types.Type.OBJECT, properties={})
+                description=(
+                    "Identifica a pessoa atualmente em foco pela câmera usando o banco de dados de rostos conhecidos. "
+                    "Esta função DEVE ser chamada apenas quando o usuário expressar explicitamente a intenção de identificar alguém (ex: 'Quem é essa pessoa?', 'Você conhece quem está aqui?'). "
+                    "Se múltiplos rostos forem detectados no frame, a função focará no mais proeminente ou central. "
+                    "O resultado incluirá a confiança da identificação (ex: 'Identificado como [nome] com 95% de confiança.'). "
+                    "Se nenhuma correspondência confiável for encontrada, retorna 'Pessoa não reconhecida.' ou similar."
+                ),
+                parameters=types.Schema(type=types.Type.OBJECT, properties={}) # Correto, sem parâmetros diretos do usuário no momento da chamada.
             ),
             types.FunctionDeclaration(
                 name="find_object_and_estimate_distance",
-                description="Localiza um objeto específico na visão da câmera usando detecção de objetos (YOLO) e estima sua distância em passos com MiDaS. O 'object_type' deve ser uma das categorias do modelo YOLO (ex: 'person', 'car', 'bottle'). Retorna a direção (frente, esquerda, direita), se está sobre uma superfície (ex: mesa), e a distância estimada. Se o objeto não for encontrado, retorna 'Objeto não encontrado na cena.'",
+                description=(
+                    "Localiza um objeto específico na visão da câmera usando detecção de objetos (YOLO) e estima sua distância em passos (usando MiDaS). "
+                    "A IA deve extrair o 'object_type' (categoria YOLO principal) da 'object_description' fornecida pelo usuário. "
+                    "Retorna uma string descrevendo a localização do objeto, incluindo sua direção relativa ao usuário (frente, esquerda, direita), "
+                    "se aparenta estar sobre uma superfície (ex: 'sobre uma mesa'), e a distância estimada em passos. "
+                    "Se o objeto não for encontrado, retorna uma mensagem como 'Objeto [descrição] não encontrado na cena.'"
+                ),
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
                     properties={
                         "object_description": types.Schema(
                             type=types.Type.STRING,
-                            description="Descrição completa do objeto (ex: 'garrafa azul')."
+                            description="Descrição completa do objeto conforme fornecida pelo usuário (ex: 'garrafa de água azul', 'meu celular', 'o livro vermelho na prateleira')."
                         ),
                         "object_type": types.Schema(
                             type=types.Type.STRING,
-                            description="Tipo principal do objeto (ex: 'bottle'). Deve ser uma categoria válida do modelo YOLO."
+                            description=(
+                                "O tipo principal ou categoria do objeto a ser detectado (ex: 'bottle', 'person', 'car', 'book'). "
+                                "Este deve ser um termo que o sistema de detecção YOLO possa reconhecer. "
+                                "A IA deve inferir o 'object_type' mais apropriado a partir da 'object_description' do usuário. "
+                                "O sistema possui um mapeamento interno para classes YOLO (ex: 'celular' -> 'cell phone')."
+                            )
+                            # Se fosse usar enum:
+                            # enum=yolo_valid_object_types # Onde yolo_valid_object_types é list(YOLO_CLASS_MAP.keys())
                         )
                     },
                     required=["object_description", "object_type"]
