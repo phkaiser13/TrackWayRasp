@@ -7,7 +7,7 @@ import json
 import logging
 
 
-dependency_path = r"C:\TrackieIntelligence\WorkTools"
+dependency_path = r"C:\TrackieIntelligence\WorkTools\WorkingTools"
 
 
 if dependency_path not in sys.path:
@@ -64,6 +64,13 @@ MODEL = "models/gemini-2.0-flash-live-001"
 DEFAULT_MODE = "camera"
 BaseDir = "C:\TrackieIntelligence"
 DANGER_SOUND_PATH = os.path.join(BaseDir, "WorkTools", "SoundBibTrackie", "Trackiedanger.wav")
+
+# --- Inicialização do PyAudio ---
+try:
+    pya = pyaudio.PyAudio()
+except Exception as e:
+    logger.error(f"Erro ao inicializar PyAudio: {e}. O áudio não funcionará.")
+    pya = None
 
 def play_wav_file_sync(filepath):
     """Reproduz um arquivo WAV de forma síncrona."""
@@ -377,12 +384,7 @@ CONFIG = types.LiveConnectConfig(
     )
 )
 
-# --- Inicialização do PyAudio ---
-try:
-    pya = pyaudio.PyAudio()
-except Exception as e:
-    logger.error(f"Erro ao inicializar PyAudio: {e}. O áudio não funcionará.")
-    pya = None
+
 
 # --- Classe Principal do Assistente ---
 class AudioLoop:
